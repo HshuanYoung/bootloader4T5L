@@ -1,0 +1,852 @@
+/**
+ * @file    ota.c
+ * @brief   UART5 OTA下载与BOOT应用实现。
+ * @author  yangming
+ * @version 1.0.0
+ */
+
+#include "ota.h"
+#include "boot.h"
+#include "timer.h"
+#include "uart.h"
+
+#define otaFRAME_HEAD_0 0xABU
+#define otaFRAME_HEAD_1 0xCDU
+#define otaCMD_FILE_INFO 0x04U
+#define otaCMD_READ_DATA 0x05U
+#define otaCMD_FILE_RESULT 0x06U
+
+#define otaSTEP_IDLE 0xFFU
+#define otaSTEP_WAIT_DATA 0x50U
+#define otaSTEP_WAIT_RESULT_ACK 0x62U
+#define otaTIMEOUT_RELOAD 200U
+
+#define otaNAND_START_ADDR 0x04000000UL
+#define otaNOR_RESERVED_ID 21U
+#define otaNAND_BLOCK_BYTES 4096UL
+
+static uint8_t xdata OtaVpBlock[otaHEADER_BYTES];
+
+static OtaContext xdata OtaStatus;
+static uint16_t xdata OtaTimeout;
+static uint8_t OtaStep = otaSTEP_IDLE;
+static uint8_t OtaLastResult = 2U;
+static uint8_t OtaDownloadCompleteFlag;
+static uint8_t OtaFrameActivityFlag;
+
+/**
+ * @brief 读取大端16位数值。
+ */
+static uint16_t OtaReadBe16(uint8_t *buf)
+{
+    return ((uint16_t)buf[0] << 8) | (uint16_t)buf[1];
+}
+
+/**
+ * @brief 读取大端32位数值。
+ */
+static uint32_t OtaReadBe32(uint8_t *buf)
+{
+    return ((uint32_t)buf[0] << 24) |
+           ((uint32_t)buf[1] << 16) |
+           ((uint32_t)buf[2] << 8) |
+           (uint32_t)buf[3];
+}
+
+/**
+ * @brief 写入大端16位数值。
+ */
+static void OtaWriteBe16(uint8_t *buf, uint16_t value)
+{
+    buf[0] = (uint8_t)(value >> 8);
+    buf[1] = (uint8_t)value;
+}
+
+/**
+ * @brief 写入大端32位数值。
+ */
+static void OtaWriteBe32(uint8_t *buf, uint32_t value)
+{
+    buf[0] = (uint8_t)(value >> 24);
+    buf[1] = (uint8_t)(value >> 16);
+    buf[2] = (uint8_t)(value >> 8);
+    buf[3] = (uint8_t)value;
+}
+
+/**
+ * @brief 计算Modbus风格CRC16。
+ */
+static uint16_t OtaCrc16(uint8_t *update_data, uint16_t len)
+{
+    uint16_t crc;
+    uint16_t i;
+    uint8_t j;
+
+    crc = 0xFFFFU;
+    for(i = 0U; i < len; i++)
+    {
+        crc ^= *update_data++;
+        for(j = 0U; j < 8U; j++)
+        {
+            if((crc & 0x0001U) != 0U)
+            {
+                crc = (crc >> 1) ^ 0xA001U;
+            }
+            else
+            {
+                crc >>= 1;
+            }
+        }
+    }
+
+    return crc;
+}
+
+/**
+ * @brief 32位向上整除，结果按uint16_t上限饱和。
+ */
+static uint16_t OtaCeilDiv32(uint32_t value, uint32_t divisor)
+{
+    uint32_t result;
+
+    if(value == 0UL)
+    {
+        return 1U;
+    }
+
+    result = value / divisor;
+    if((value % divisor) != 0UL)
+    {
+        result++;
+    }
+
+    if(result > 0xFFFFUL)
+    {
+        result = 0xFFFFUL;
+    }
+
+    return (uint16_t)result;
+}
+
+/**
+ * @brief 等待DGUS命令寄存器空闲。
+ */
+static void OtaWaitDgusCmdIdle(uint16_t cmd_addr)
+{
+    uint8_t cmd_state[4];
+
+    do
+    {
+        delay_ms(2U);
+        read_dgus_vp(cmd_addr, cmd_state, 2U);
+    }while(cmd_state[0] != 0U);
+}
+
+/**
+ * @brief 启动NAND到NOR的拷贝操作。
+ */
+static void OtaCopyNandToNor(uint32_t nand_addr, uint8_t nor_id, uint16_t block_count)
+{
+    uint8_t cmd[12];
+
+    cmd[0] = 0x5AU;
+    cmd[1] = 0x06U;
+    OtaWriteBe32(&cmd[2], nand_addr);
+    cmd[6] = 0U;
+    cmd[7] = nor_id;
+    OtaWriteBe16(&cmd[8], block_count);
+    cmd[10] = 0U;
+    cmd[11] = 0U;
+
+    write_dgus_vp(sysDGUS_NAND_CMD_ADDR, cmd, 6U);
+    OtaWaitDgusCmdIdle(sysDGUS_NAND_CMD_ADDR);
+    delay_ms(50U);
+}
+
+/**
+ * @brief 将NOR文件块读取到DGUS VP缓存。
+ */
+static void OtaReadNorToVp(uint8_t nor_id, uint32_t nor_offset,
+                           uint16_t vp_addr, uint16_t len_words)
+{
+    uint8_t cmd[12];
+
+    cmd[0] = 0x5AU;
+    cmd[1] = 0x01U;
+    cmd[2] = nor_id;
+    cmd[3] = (uint8_t)(nor_offset >> 16);
+    cmd[4] = (uint8_t)(nor_offset >> 8);
+    cmd[5] = (uint8_t)nor_offset;
+    OtaWriteBe16(&cmd[6], vp_addr);
+    OtaWriteBe16(&cmd[8], len_words);
+    cmd[10] = 0U;
+    cmd[11] = 0U;
+
+    write_dgus_vp(sysDGUS_NAND_CMD_ADDR, cmd, 6U);
+    OtaWaitDgusCmdIdle(sysDGUS_NAND_CMD_ADDR);
+    delay_ms(50U);
+}
+
+/**
+ * @brief 通过0x0008命令将1个4KB VP缓存块写入NOR。
+ */
+static void OtaWriteF000ToNor(uint32_t flash_addr)
+{
+    uint8_t cmd[12];
+
+    cmd[0] = 0xA5U;
+    cmd[1] = (uint8_t)(flash_addr >> 16);
+    cmd[2] = (uint8_t)(flash_addr >> 8);
+    cmd[3] = (uint8_t)flash_addr;
+    cmd[4] = 0xF0U;
+    cmd[5] = 0x00U;
+    cmd[6] = 0x08U;
+    cmd[7] = 0x00U;
+    cmd[8] = 0U;
+    cmd[9] = 0U;
+    cmd[10] = 0U;
+    cmd[11] = 0U;
+
+    write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 4U);
+    OtaWaitDgusCmdIdle(sysDGUS_FLASH_RW_CMD_ADDR);
+    delay_ms(50U);
+}
+
+/**
+ * @brief 启动从VP缓存到NAND的写入操作。
+ */
+static void OtaStartNandWrite(uint32_t nand_addr, uint16_t vp_addr, uint16_t block_count)
+{
+    uint8_t cmd[12];
+
+    cmd[0] = 0x5AU;
+    cmd[1] = 0x04U;
+    OtaWriteBe32(&cmd[2], nand_addr);
+    OtaWriteBe16(&cmd[6], vp_addr);
+    OtaWriteBe16(&cmd[8], block_count);
+    cmd[10] = 0U;
+    cmd[11] = 0U;
+
+    write_dgus_vp(sysDGUS_NAND_CMD_ADDR, cmd, 6U);
+}
+
+/**
+ * @brief 启动NAND CRC32计算。
+ */
+static void OtaStartNandCrc32(uint32_t nand_addr, uint16_t block_count)
+{
+    uint8_t cmd[12];
+
+    cmd[0] = 0x5AU;
+    cmd[1] = 0x05U;
+    OtaWriteBe32(&cmd[2], nand_addr);
+    OtaWriteBe16(&cmd[6], block_count);
+    cmd[8] = 0U;
+    cmd[9] = 0U;
+    cmd[10] = 0U;
+    cmd[11] = 0U;
+
+    write_dgus_vp(sysDGUS_NAND_CMD_ADDR, cmd, 6U);
+}
+
+/**
+ * @brief 读取NAND CRC32结果。
+ */
+static uint32_t OtaReadNandCrc32(void)
+{
+    uint8_t crc_buf[4];
+
+    read_dgus_vp(sysDGUS_NAND_CRC_ADDR, crc_buf, 2U);
+    return ((uint32_t)crc_buf[3] << 24) |
+           ((uint32_t)crc_buf[2] << 16) |
+           ((uint32_t)crc_buf[1] << 8) |
+           (uint32_t)crc_buf[0];
+}
+
+/**
+ * @brief 清空共用4KB工作缓存。
+ */
+static void OtaClearWorkBlock(void)
+{
+    uint16_t i;
+
+    for(i = 0U; i < otaHEADER_BYTES; i++)
+    {
+        OtaVpBlock[i] = 0U;
+    }
+}
+
+/**
+ * @brief 将OTA分包载荷拷贝到共用4KB工作缓存。
+ */
+static void OtaCopyPacketToWorkBlock(uint8_t *packet_data, uint16_t packet_len)
+{
+    uint16_t i;
+
+    OtaClearWorkBlock();
+    for(i = 0U; i < packet_len; i++)
+    {
+        OtaVpBlock[i] = packet_data[i];
+    }
+}
+
+/**
+ * @brief 通过UART5发送1帧AB CD OTA数据。
+ */
+static void OtaSendFrame(uint8_t *buf, uint16_t len)
+{
+    OtaWriteBe16(&buf[2], len - 4U);
+    UartSendData(&Uart5, buf, len);
+}
+
+/**
+ * @brief 设置OTA重传超时。
+ */
+static void OtaSetTimeout(uint8_t step)
+{
+    OtaStep = step;
+    OtaTimeout = otaTIMEOUT_RELOAD;
+}
+
+/**
+ * @brief 发送05数据请求。
+ */
+static void OtaSendData05(void)
+{
+    uint8_t send_buf[32];
+    uint16_t send_len;
+    OtaFileInfo *file;
+
+    send_len = 0U;
+    file = &OtaStatus.file[OtaStatus.now_num];
+
+    send_buf[send_len++] = otaFRAME_HEAD_0;
+    send_buf[send_len++] = otaFRAME_HEAD_1;
+    send_buf[send_len++] = 0U;
+    send_buf[send_len++] = 0U;
+    send_buf[send_len++] = otaCMD_READ_DATA;
+    send_buf[send_len++] = file->itype;
+    send_buf[send_len++] = file->apply;
+    OtaWriteBe16(&send_buf[send_len], file->unid);
+    send_len += 2U;
+    OtaWriteBe32(&send_buf[send_len], OtaStatus.off_position);
+    send_len += 4U;
+    OtaWriteBe32(&send_buf[send_len], OtaStatus.off_len);
+    send_len += 4U;
+
+    OtaSendFrame(send_buf, send_len);
+}
+
+/**
+ * @brief 发送06文件结果响应。
+ */
+static void OtaSendData06(uint8_t result)
+{
+    uint8_t send_buf[16];
+    uint16_t send_len;
+    OtaFileInfo *file;
+
+    send_len = 0U;
+    OtaLastResult = result;
+    file = &OtaStatus.file[OtaStatus.now_num];
+
+    send_buf[send_len++] = otaFRAME_HEAD_0;
+    send_buf[send_len++] = otaFRAME_HEAD_1;
+    send_buf[send_len++] = 0U;
+    send_buf[send_len++] = 0U;
+    send_buf[send_len++] = otaCMD_FILE_RESULT;
+    send_buf[send_len++] = file->itype;
+    send_buf[send_len++] = file->apply;
+    OtaWriteBe16(&send_buf[send_len], file->unid);
+    send_len += 2U;
+    send_buf[send_len++] = result;
+
+    OtaSendFrame(send_buf, send_len);
+}
+
+/**
+ * @brief 校验05数据分包CRC16。
+ */
+static uint8_t OtaPacketCrc16Ok(uint8_t *frame, uint16_t packet_len)
+{
+    uint16_t crc_calc;
+    uint16_t crc_recv;
+
+    crc_calc = OtaCrc16(&frame[26], packet_len);
+    crc_recv = OtaReadBe16(&frame[26U + packet_len]);
+
+    return (crc_calc == crc_recv) ? 1U : 0U;
+}
+
+/**
+ * @brief 初始化OTA下载状态。
+ */
+void OtaInit(void)
+{
+    uint16_t i;
+    uint8_t *ctx;
+
+    ctx = (uint8_t *)&OtaStatus;
+    for(i = 0U; i < sizeof(OtaStatus); i++)
+    {
+        ctx[i] = 0U;
+    }
+
+    OtaStatus.flash_start_num = 64U;
+    OtaStep = otaSTEP_IDLE;
+    OtaTimeout = 0U;
+    OtaLastResult = 2U;
+    OtaDownloadCompleteFlag = 0U;
+}
+
+/**
+ * @brief 处理04文件信息命令。
+ */
+static void OtaHandleFileInfo(uint8_t *frame, uint16_t len)
+{
+    uint8_t name_len;
+    uint16_t status_index;
+    uint16_t crc_index;
+    uint16_t blocks;
+    OtaFileInfo *file;
+
+    if(len < 25U)
+    {
+        return;
+    }
+
+    name_len = frame[19];
+    status_index = 20U + (uint16_t)name_len;
+    crc_index = status_index + 1U;
+
+    if((status_index >= len) || ((crc_index + 4U) > len))
+    {
+        return;
+    }
+    if(frame[status_index] != 0U)
+    {
+        return;
+    }
+    if(frame[6] >= otaDOWNLOAD_MAX)
+    {
+        return;
+    }
+
+    if(frame[6] == 0U)
+    {
+        OtaInit();
+    }
+
+    OtaStatus.total_num = frame[5];
+    if(OtaStatus.total_num > otaDOWNLOAD_MAX)
+    {
+        OtaStatus.total_num = otaDOWNLOAD_MAX;
+    }
+
+    OtaStatus.now_num = frame[6];
+    OtaStatus.off_position = 0UL;
+    OtaStatus.off_len = otaNAND_BLOCK_BYTES;
+    file = &OtaStatus.file[OtaStatus.now_num];
+    file->itype = frame[11];
+    file->apply = frame[12];
+    file->unid = OtaReadBe16(&frame[13]);
+    file->size = OtaReadBe32(&frame[15]);
+    file->crc32 = OtaReadBe32(&frame[crc_index]);
+    file->flash_start = OtaStatus.flash_start_num;
+
+    blocks = OtaCeilDiv32(file->size, otaNAND_BLOCK_BYTES);
+    OtaStatus.flash_start_num += blocks;
+    OtaStatus.download_end_flag = 0U;
+    OtaFrameActivityFlag = 1U;
+
+    OtaSendData05();
+    OtaSetTimeout(otaSTEP_WAIT_DATA);
+}
+
+/**
+ * @brief 将1个分包载荷写入NAND。
+ */
+static void OtaWritePacketToNand(uint8_t *frame, uint16_t packet_len)
+{
+    uint16_t vp_addr;
+    uint32_t now_packet;
+    uint32_t nand_addr;
+
+    now_packet = (uint32_t)OtaStatus.file[OtaStatus.now_num].flash_start +
+                 (OtaStatus.off_position / otaNAND_BLOCK_BYTES);
+
+    if((now_packet & 0x01UL) != 0UL)
+    {
+        vp_addr = otaCACHE_VP_A;
+    }
+    else
+    {
+        vp_addr = otaCACHE_VP_B;
+    }
+
+    OtaCopyPacketToWorkBlock(&frame[26], packet_len);
+    write_dgus_vp(vp_addr, OtaVpBlock, otaHEADER_BYTES / 2U);
+
+    OtaWaitDgusCmdIdle(sysDGUS_NAND_CMD_ADDR);
+    nand_addr = otaNAND_START_ADDR + (now_packet * otaNAND_BLOCK_BYTES);
+    OtaStartNandWrite(nand_addr, vp_addr, 1U);
+}
+
+/**
+ * @brief 通过NAND控制器校验当前文件CRC32。
+ */
+static uint8_t OtaFileCrcOk(void)
+{
+    uint16_t blocks;
+    uint32_t nand_addr;
+    uint32_t crc32;
+    OtaFileInfo *file;
+
+#if !otaCRC32_CHECK_ENABLED
+    return 1U;
+#else
+    file = &OtaStatus.file[OtaStatus.now_num];
+    if(file->crc32 == 0UL)
+    {
+        return 1U;
+    }
+
+    blocks = OtaCeilDiv32(file->size, otaNAND_BLOCK_BYTES);
+    nand_addr = otaNAND_START_ADDR + ((uint32_t)file->flash_start * otaNAND_BLOCK_BYTES);
+
+    OtaWaitDgusCmdIdle(sysDGUS_NAND_CMD_ADDR);
+    OtaStartNandCrc32(nand_addr, blocks);
+    OtaWaitDgusCmdIdle(sysDGUS_NAND_CMD_ADDR);
+    delay_ms(50U);
+    crc32 = OtaReadNandCrc32();
+
+    return (crc32 == file->crc32) ? 1U : 0U;
+#endif
+}
+
+/**
+ * @brief 处理05分包数据命令。
+ */
+static void OtaHandlePacketData(uint8_t *frame, uint16_t len)
+{
+    uint16_t payload_len;
+    OtaFileInfo *file;
+
+    if(len < 30U)
+    {
+        return;
+    }
+
+    payload_len = OtaReadBe16(&frame[2]);
+    if(payload_len < 24U)
+    {
+        return;
+    }
+    payload_len -= 24U;
+
+    if((payload_len > otaNAND_BLOCK_BYTES) || ((26U + payload_len + 2U) > len))
+    {
+        return;
+    }
+
+    if(OtaPacketCrc16Ok(frame, payload_len) == 0U)
+    {
+        OtaSendData05();
+        OtaSetTimeout(otaSTEP_WAIT_DATA);
+        return;
+    }
+
+    OtaStep = otaSTEP_IDLE;
+    OtaFrameActivityFlag = 1U;
+    OtaWritePacketToNand(frame, payload_len);
+
+    file = &OtaStatus.file[OtaStatus.now_num];
+    if((OtaStatus.off_position + OtaStatus.off_len) >= file->size)
+    {
+        if(OtaFileCrcOk() != 0U)
+        {
+            OtaSendData06(2U);
+            OtaSetTimeout(otaSTEP_WAIT_RESULT_ACK);
+            if((OtaStatus.now_num + 1U) >= OtaStatus.total_num)
+            {
+                OtaStatus.download_end_flag = 0x01U;
+            }
+        }
+        else
+        {
+            OtaSendData06(3U);
+            OtaSetTimeout(otaSTEP_WAIT_RESULT_ACK);
+        }
+    }
+    else
+    {
+        OtaStatus.off_position += OtaStatus.off_len;
+        OtaSendData05();
+        OtaSetTimeout(otaSTEP_WAIT_DATA);
+    }
+}
+
+/**
+ * @brief 处理06结果确认。
+ */
+static void OtaHandleFileResultAck(void)
+{
+    OtaStep = otaSTEP_IDLE;
+    OtaFrameActivityFlag = 1U;
+    if(OtaStatus.download_end_flag == 0x01U)
+    {
+        OtaStatus.download_end_flag = 0x11U;
+    }
+}
+
+/**
+ * @brief 将1帧AB CD数据分发到OTA状态机。
+ */
+void OtaReceive(uint8_t *frame, uint16_t len)
+{
+    uint16_t payload_len;
+
+    if((frame == NULL) || (len < 5U))
+    {
+        return;
+    }
+    if((frame[0] != otaFRAME_HEAD_0) || (frame[1] != otaFRAME_HEAD_1))
+    {
+        return;
+    }
+
+    payload_len = OtaReadBe16(&frame[2]);
+    if((payload_len + 4U) > len)
+    {
+        return;
+    }
+
+    switch(frame[4])
+    {
+        case otaCMD_FILE_INFO:
+            OtaHandleFileInfo(frame, len);
+            break;
+        case otaCMD_READ_DATA:
+            OtaHandlePacketData(frame, len);
+            break;
+        case otaCMD_FILE_RESULT:
+            OtaHandleFileResultAck();
+            break;
+        default:
+            break;
+    }
+}
+
+/**
+ * @brief 标记下载完成，等待应用。
+ */
+static void OtaFinishDownload(void)
+{
+    OtaStatus.download_end_flag = 0U;
+    OtaDownloadCompleteFlag = 1U;
+}
+
+/**
+ * @brief 执行超时、重试和完成检测。
+ */
+void OtaTask(void)
+{
+    if(OtaStep != otaSTEP_IDLE)
+    {
+        if(OtaTimeout == 0U)
+        {
+            if((OtaStep & 0xF0U) == 0x50U)
+            {
+                OtaSendData05();
+                OtaSetTimeout(otaSTEP_WAIT_DATA);
+            }
+            else if((OtaStep & 0xF0U) == 0x60U)
+            {
+                OtaSendData06(OtaLastResult);
+                OtaSetTimeout(otaSTEP_WAIT_RESULT_ACK);
+            }
+            else
+            {
+                OtaStep = otaSTEP_IDLE;
+            }
+        }
+    }
+
+    if(OtaStatus.download_end_flag == 0x11U)
+    {
+        OtaFinishDownload();
+    }
+}
+
+/**
+ * @brief OTA 1ms超时节拍，由Timer0调用。
+ */
+void OtaTimerTick1ms(void)
+{
+    static uint8_t tick_10ms = 0U;
+
+    tick_10ms++;
+    if(tick_10ms >= 10U)
+    {
+        tick_10ms = 0U;
+        if(OtaTimeout != 0U)
+        {
+            OtaTimeout--;
+        }
+    }
+}
+
+/**
+ * @brief 返回升级包是否已完整下载。
+ */
+uint8_t OtaDownloadComplete(void)
+{
+    return OtaDownloadCompleteFlag;
+}
+
+/**
+ * @brief 返回并清除有效帧活动标志。
+ */
+uint8_t OtaConsumeActivity(void)
+{
+    uint8_t activity;
+
+    activity = OtaFrameActivityFlag;
+    OtaFrameActivityFlag = 0U;
+    return activity;
+}
+
+/**
+ * @brief 应用下载包中的1个内部NOR文件。
+ */
+static void OtaApplyInternalFile(OtaFileInfo *file)
+{
+    uint32_t nand_addr;
+    uint32_t block_count;
+
+    nand_addr = (uint32_t)file->flash_start;
+    nand_addr *= otaNAND_BLOCK_BYTES;
+    nand_addr += otaNAND_START_ADDR;
+
+    if(file->unid >= 0x00C0U)
+    {
+        block_count = OtaCeilDiv32(file->size, 8388608UL);
+    }
+    else
+    {
+        block_count = OtaCeilDiv32(file->size, 262144UL);
+    }
+    if(block_count > 255UL)
+    {
+        block_count = 255UL;
+    }
+
+    OtaCopyNandToNor(nand_addr, (uint8_t)file->unid, (uint16_t)block_count);
+}
+
+/**
+ * @brief 应用下载包中的1个外部字库文件。
+ */
+static void OtaApplyLibraryFile(OtaFileInfo *file)
+{
+    uint32_t nand_addr;
+    uint32_t extern_flash_addr;
+    uint32_t flash_addr;
+    uint8_t block_index;
+    uint8_t block_count;
+    uint16_t block_count_words;
+
+    nand_addr = (uint32_t)file->flash_start;
+    nand_addr *= otaNAND_BLOCK_BYTES;
+    nand_addr += otaNAND_START_ADDR;
+
+    OtaCopyNandToNor(nand_addr, otaNOR_RESERVED_ID, 1U);
+
+    block_count_words = OtaCeilDiv32(file->size, otaNAND_BLOCK_BYTES);
+    if(block_count_words > 64U)
+    {
+        block_count_words = 64U;
+    }
+    block_count = (uint8_t)block_count_words;
+
+    extern_flash_addr = 0UL;
+    flash_addr = (uint32_t)file->unid * 2048UL;
+
+    for(block_index = 0U; block_index < block_count; block_index++)
+    {
+        OtaReadNorToVp(otaNOR_RESERVED_ID, extern_flash_addr, 0xF000U, 0x0800U);
+        OtaWriteF000ToNor(flash_addr);
+
+        extern_flash_addr += 2048UL;
+        flash_addr += 2048UL;
+    }
+}
+
+/**
+ * @brief 应用当前下载上下文中的升级包。
+ */
+void OtaActionFromDownload(void)
+{
+    uint8_t file_index;
+    OtaFileInfo *file;
+
+    for(file_index = 0U; file_index < OtaStatus.total_num; file_index++)
+    {
+        file = &OtaStatus.file[file_index];
+        if((file->itype == 1U) && (file->unid <= 127U))
+        {
+            OtaApplyLibraryFile(file);
+        }
+        else if((file->itype >= 2U) && (file->itype <= 8U) && (file->unid <= 255U))
+        {
+            OtaApplyInternalFile(file);
+        }
+        else
+        {
+            __NOP();
+        }
+    }
+}
+
+/**
+ * @brief 进入UART5升级模式，完成或超时后返回正常加载流程。
+ */
+void BootEnterUpgradeMode(void)
+{
+    uint32_t idle_ms;
+
+    idle_ms = 0UL;
+
+    OtaInit();
+    (void)OtaConsumeActivity();
+    Uart5Init(uartUART5_BAUDRATE);
+    TimerInit();
+
+    while(idle_ms < BOOT_UPGRADE_IDLE_TIMEOUT_MS)
+    {
+        UartReadFrame(&Uart5);
+        OtaTask();
+
+        if(OtaDownloadComplete() != 0U)
+        {
+            TimerStop();
+            OtaActionFromDownload();
+            BootClearControl();
+            (void)BootWaitLoadCommand(BOOT_POST_UPGRADE_LOAD_TIMEOUT_MS);
+            return;
+        }
+
+        if(OtaConsumeActivity() != 0U)
+        {
+            idle_ms = 0UL;
+        }
+        else
+        {
+            delay_ms(1U);
+            idle_ms++;
+        }
+    }
+
+    TimerStop();
+    BootClearControl();
+}
