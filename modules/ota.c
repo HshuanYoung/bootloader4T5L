@@ -28,6 +28,35 @@
 #define otaNOR_RESERVED_ID 21U
 #define otaNAND_BLOCK_BYTES 4096UL
 
+#define OtaReadBe16(buf) \
+    ((((uint16_t)(buf)[0]) << 8) | (uint16_t)(buf)[1])
+
+#define OtaReadBe32(buf) \
+    ((((uint32_t)(buf)[0]) << 24) | \
+     (((uint32_t)(buf)[1]) << 16) | \
+     (((uint32_t)(buf)[2]) << 8) | \
+     (uint32_t)(buf)[3])
+
+#define OtaWriteBe16(buf, value) \
+    do { \
+        (buf)[0] = (uint8_t)((value) >> 8); \
+        (buf)[1] = (uint8_t)(value); \
+    }while(0)
+
+#define OtaWriteBe32(buf, value) \
+    do { \
+        (buf)[0] = (uint8_t)((value) >> 24); \
+        (buf)[1] = (uint8_t)((value) >> 16); \
+        (buf)[2] = (uint8_t)((value) >> 8); \
+        (buf)[3] = (uint8_t)(value); \
+    }while(0)
+
+#define OtaSetTimeout(step_value) \
+    do { \
+        OtaStep = (step_value); \
+        OtaTimeout = otaTIMEOUT_RELOAD; \
+    }while(0)
+
 static uint8_t xdata OtaVpBlock[otaHEADER_BYTES];
 
 static OtaContext xdata OtaStatus;
@@ -36,45 +65,6 @@ static uint8_t OtaStep = otaSTEP_IDLE;
 static uint8_t OtaLastResult = 2U;
 static uint8_t OtaDownloadCompleteFlag;
 static uint8_t OtaFrameActivityFlag;
-
-/**
- * @brief 从xdata缓冲读取大端16位数值。
- */
-static uint16_t OtaReadBe16(uint8_t xdata *buf)
-{
-    return ((uint16_t)buf[0] << 8) | (uint16_t)buf[1];
-}
-
-/**
- * @brief 从xdata缓冲读取大端32位数值。
- */
-static uint32_t OtaReadBe32(uint8_t xdata *buf)
-{
-    return ((uint32_t)buf[0] << 24) |
-           ((uint32_t)buf[1] << 16) |
-           ((uint32_t)buf[2] << 8) |
-           (uint32_t)buf[3];
-}
-
-/**
- * @brief 写入大端16位数值。
- */
-static void OtaWriteBe16(uint8_t *buf, uint16_t value)
-{
-    buf[0] = (uint8_t)(value >> 8);
-    buf[1] = (uint8_t)value;
-}
-
-/**
- * @brief 写入大端32位数值。
- */
-static void OtaWriteBe32(uint8_t *buf, uint32_t value)
-{
-    buf[0] = (uint8_t)(value >> 24);
-    buf[1] = (uint8_t)(value >> 16);
-    buf[2] = (uint8_t)(value >> 8);
-    buf[3] = (uint8_t)value;
-}
 
 /**
  * @brief 计算xdata缓冲的Modbus风格CRC16。
@@ -301,15 +291,6 @@ static void OtaSendFrame(uint8_t *buf, uint16_t len)
 {
     OtaWriteBe16(&buf[2], len - 4U);
     UartSendData(&Uart5, buf, len);
-}
-
-/**
- * @brief 设置OTA重传超时。
- */
-static void OtaSetTimeout(uint8_t step)
-{
-    OtaStep = step;
-    OtaTimeout = otaTIMEOUT_RELOAD;
 }
 
 /**
@@ -685,15 +666,6 @@ void OtaReceive(uint8_t xdata *frame, uint16_t len)
 }
 
 /**
- * @brief 标记下载完成，等待应用。
- */
-static void OtaFinishDownload(void)
-{
-    OtaStatus.download_end_flag = 0U;
-    OtaDownloadCompleteFlag = 1U;
-}
-
-/**
  * @brief 执行超时、重试和完成检测。
  */
 void OtaTask(void)
@@ -721,7 +693,8 @@ void OtaTask(void)
 
     if(OtaStatus.download_end_flag == 0x11U)
     {
-        OtaFinishDownload();
+        OtaStatus.download_end_flag = 0U;
+        OtaDownloadCompleteFlag = 1U;
     }
 }
 
@@ -741,26 +714,6 @@ void OtaTimerTick1ms(void)
             OtaTimeout--;
         }
     }
-}
-
-/**
- * @brief 返回升级包是否已完整下载。
- */
-uint8_t OtaDownloadComplete(void)
-{
-    return OtaDownloadCompleteFlag;
-}
-
-/**
- * @brief 返回并清除有效帧活动标志。
- */
-uint8_t OtaConsumeActivity(void)
-{
-    uint8_t activity;
-
-    activity = OtaFrameActivityFlag;
-    OtaFrameActivityFlag = 0U;
-    return activity;
 }
 
 /**
@@ -897,7 +850,7 @@ void BootEnterUpgradeMode(void)
     idle_ms = 0UL;
 
     OtaInit();
-    (void)OtaConsumeActivity();
+    OtaFrameActivityFlag = 0U;
     Uart5Init(uartUART5_BAUDRATE);
     TimerInit();
     BootWriteProgress(0U);
@@ -909,7 +862,7 @@ void BootEnterUpgradeMode(void)
         UartReadFrame(&Uart5);
         OtaTask();
 
-        if(OtaDownloadComplete() != 0U)
+        if(OtaDownloadCompleteFlag != 0U)
         {
             OtaActionFromDownload();
             BootWriteProgress(100U);
@@ -924,8 +877,9 @@ void BootEnterUpgradeMode(void)
             return;
         }
 
-        if(OtaConsumeActivity() != 0U)
+        if(OtaFrameActivityFlag != 0U)
         {
+            OtaFrameActivityFlag = 0U;
             idle_ms = 0UL;
         }
         else

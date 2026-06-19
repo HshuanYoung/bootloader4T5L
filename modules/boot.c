@@ -18,16 +18,9 @@
 #define bootCODE_COPY_BLOCK_WORDS 0x0800U
 #define bootCODE_COPY_BLOCK_COUNT 16U
 
-static uint8_t xdata BootVpF000Cache[bootF000_CACHE_BYTES];
+#define BootReadControl(control_buf) read_dgus_vp(BOOT_CTRL_ADDR, (control_buf), 2U)
 
-/**
- * @brief 从VP 0x0020读取4字节启动控制值。
- * @param[out] control_buf 4字节控制缓存。
- */
-static void BootReadControl(uint8_t *control_buf)
-{
-    read_dgus_vp(BOOT_CTRL_ADDR, control_buf, 2U);
-}
+static uint8_t xdata BootVpF000Cache[bootF000_CACHE_BYTES];
 
 /**
  * @brief 读取1个VP字。
@@ -87,14 +80,6 @@ void BootSetDefaultLoadControl(void)
     control_buf[2] = (uint8_t)(BOOT_DEFAULT_START_BLOCK >> 8);
     control_buf[3] = (uint8_t)BOOT_DEFAULT_START_BLOCK;
     BootSetControl(control_buf, 1U);
-}
-
-/**
- * @brief 从片内NOR Flash恢复BOOT配置到DGUS VP。
- */
-void BootReloadConfigFromFlash(void)
-{
-    FlashToDgus((uint32_t)BOOT_CTRL_ADDR, BOOT_CTRL_ADDR, BOOT_CONFIG_WORDS);
 }
 
 /**

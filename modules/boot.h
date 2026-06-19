@@ -27,10 +27,12 @@ void BootWaitRecoveryCommand(void);
 void BootClearControl(void);
 void BootSetControl(uint8_t *control_buf, uint8_t persist);
 void BootSetDefaultLoadControl(void);
-void BootReloadConfigFromFlash(void);
 void BootWriteProgress(uint8_t progress);
 void BootSwitchConfiguredPage(uint16_t page_addr);
 uint8_t BootCodeCheck(uint16_t start_block);
 void BootEnterUpgradeMode(void);
+
+#define BootReloadConfigFromFlash() \
+    FlashToDgus((uint32_t)BOOT_CTRL_ADDR, BOOT_CTRL_ADDR, BOOT_CONFIG_WORDS)
 
 #endif /* BOOT_H */

@@ -33,7 +33,6 @@ void Uart5Init(uint32_t baudrate);
 void Uart5Stop(void);
 void UartSendData(UART_TYPE *uart, uint8_t *buf, uint16_t len);
 void UartReadFrame(UART_TYPE *uart);
-uint8_t UartRecoveryRequested(void);
 uint8_t UartRecoveryGetControl(uint8_t *control_buf);
 
 #endif /* UART_H */

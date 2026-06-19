@@ -255,15 +255,6 @@ void UartReadFrame(UART_TYPE *uart)
 }
 
 /**
- * @brief 检查UART5缓存中是否收到恢复指令。
- * @return 收到有效recovery控制帧时返回1，否则返回0。
- */
-uint8_t UartRecoveryRequested(void)
-{
-    return (Uart5RecoveryType != UART_RECOVERY_NONE) ? 1U : 0U;
-}
-
-/**
  * @brief 读取并清除recovery控制帧。
  * @param[out] control_buf 4字节启动控制值。
  * @return UART_RECOVERY_*类型。
