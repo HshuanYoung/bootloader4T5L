@@ -27,7 +27,9 @@ typedef struct UartxDefine
 extern UART_TYPE Uart5;
 
 void Uart5Init(uint32_t baudrate);
+void Uart5Stop(void);
 void UartSendData(UART_TYPE *uart, uint8_t *buf, uint16_t len);
 void UartReadFrame(UART_TYPE *uart);
+uint8_t UartRecoveryRequested(void);
 
 #endif /* UART_H */

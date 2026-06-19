@@ -15,7 +15,7 @@ void main(void)
     uint16_t start_block;
     uint8_t code_valid;
 
-    if(BootIsUpgradeRequested() != 0U)
+    if((BootIsUpgradeRequested() != 0U) || (BootWaitRecoveryCommand() != 0U))
     {
         BootEnterUpgradeMode();
     }

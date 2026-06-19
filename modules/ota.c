@@ -809,6 +809,39 @@ void OtaActionFromDownload(void)
 }
 
 /**
+ * @brief 上电后等待UART5恢复指令。
+ * @return 窗口期内收到恢复指令或VP升级标志时返回1，否则返回0。
+ */
+uint8_t BootWaitRecoveryCommand(void)
+{
+    uint32_t elapsed_ms;
+    uint8_t recovery_requested;
+
+    elapsed_ms = 0UL;
+    recovery_requested = 0U;
+
+    Uart5Init(uartUART5_BAUDRATE);
+    TimerInit();
+
+    while(elapsed_ms < BOOT_RECOVERY_WINDOW_MS)
+    {
+        if((UartRecoveryRequested() != 0U) || (BootIsUpgradeRequested() != 0U))
+        {
+            recovery_requested = 1U;
+            break;
+        }
+
+        delay_ms(1U);
+        elapsed_ms++;
+    }
+
+    TimerStop();
+    Uart5Stop();
+
+    return recovery_requested;
+}
+
+/**
  * @brief 进入UART5升级模式，完成或超时后返回正常加载流程。
  */
 void BootEnterUpgradeMode(void)
@@ -830,6 +863,7 @@ void BootEnterUpgradeMode(void)
         if(OtaDownloadComplete() != 0U)
         {
             TimerStop();
+            Uart5Stop();
             OtaActionFromDownload();
             BootClearControl();
             (void)BootWaitLoadCommand(BOOT_POST_UPGRADE_LOAD_TIMEOUT_MS);
@@ -848,5 +882,6 @@ void BootEnterUpgradeMode(void)
     }
 
     TimerStop();
+    Uart5Stop();
     BootClearControl();
 }

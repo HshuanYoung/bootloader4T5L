@@ -22,6 +22,7 @@ uint8_t BootIsUpgradeRequested(void);
 uint8_t BootControlIsLoadCommand(void);
 uint16_t BootResolveStartBlock(void);
 uint8_t BootWaitLoadCommand(uint32_t timeout_ms);
+uint8_t BootWaitRecoveryCommand(void);
 void BootClearControl(void);
 uint8_t BootCodeCheck(uint16_t start_block);
 void BootEnterUpgradeMode(void);

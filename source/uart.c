@@ -12,6 +12,7 @@ UART_TYPE Uart5;
 
 static uint8_t xdata Uart5TxBuffer[uartUART5_TXBUF_SIZE + 1U];
 static uint8_t xdata Uart5RxBuffer[uartUART5_RXBUF_SIZE + 1U];
+static uint8_t Uart5RecoveryFlag;
 
 /**
  * @brief 清空字节缓存。
@@ -39,6 +40,7 @@ void Uart5Init(uint32_t baudrate)
     UartClearBuffer((uint8_t *)&Uart5, sizeof(Uart5));
     UartClearBuffer(Uart5TxBuffer, sizeof(Uart5TxBuffer));
     UartClearBuffer(Uart5RxBuffer, sizeof(Uart5RxBuffer));
+    Uart5RecoveryFlag = 0U;
 
     SCON3T = 0x80U;
     SCON3R = 0x80U;
@@ -53,15 +55,43 @@ void Uart5Init(uint32_t baudrate)
 }
 
 /**
+ * @brief 停止UART5收发中断。
+ */
+void Uart5Stop(void)
+{
+    ES3T = 0U;
+    ES3R = 0U;
+    Uart5.RxHead = 0U;
+    Uart5.RxTail = 0U;
+    Uart5.RxTimeout = 0U;
+    Uart5.RxFlag = UART_NON_REC;
+    Uart5.TxBusy = 0U;
+    Uart5RecoveryFlag = 0U;
+}
+
+/**
  * @brief UART5接收中断。
  */
 void Uart5RxIsr(void) interrupt 13
 {
+    uint16_t recovery_index;
+
     if((SCON3R & 0x01U) == 0x01U)
     {
         if(Uart5.RxHead < uartUART5_RXBUF_SIZE)
         {
             Uart5RxBuffer[Uart5.RxHead++] = SBUF3_RX;
+            if(Uart5.RxHead >= 4U)
+            {
+                recovery_index = Uart5.RxHead - 4U;
+                if((Uart5RxBuffer[recovery_index] == BOOT_RECOVERY_CMD_0) &&
+                   (Uart5RxBuffer[recovery_index + 1U] == BOOT_RECOVERY_CMD_1) &&
+                   (Uart5RxBuffer[recovery_index + 2U] == BOOT_RECOVERY_CMD_2) &&
+                   (Uart5RxBuffer[recovery_index + 3U] == BOOT_RECOVERY_CMD_3))
+                {
+                    Uart5RecoveryFlag = 1U;
+                }
+            }
             Uart5.RxFlag = UART_RECING;
             Uart5.RxTimeout = uartUART5_TIMEOUTSET;
         }
@@ -187,4 +217,13 @@ void UartReadFrame(UART_TYPE *uart)
             remaining_len--;
         }
     }
+}
+
+/**
+ * @brief 检查UART5缓存中是否收到恢复指令。
+ * @return 收到5A A5 5A A5时返回1，否则返回0。
+ */
+uint8_t UartRecoveryRequested(void)
+{
+    return Uart5RecoveryFlag;
 }
