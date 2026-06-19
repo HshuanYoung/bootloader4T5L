@@ -16,14 +16,20 @@
 #define BOOT_CTRL_UPGRADE_3 0xA5U
 #define BOOT_CTRL_LOAD_0 0xAAU
 #define BOOT_CTRL_LOAD_1 0x55U
+#define BOOT_CTRL_BYTES 4U
 
 void BootLoadApp(void);
 uint8_t BootIsUpgradeRequested(void);
 uint8_t BootControlIsLoadCommand(void);
 uint16_t BootResolveStartBlock(void);
 uint8_t BootWaitLoadCommand(uint32_t timeout_ms);
-uint8_t BootWaitRecoveryCommand(void);
+void BootWaitRecoveryCommand(void);
 void BootClearControl(void);
+void BootSetControl(uint8_t *control_buf, uint8_t persist);
+void BootSetDefaultLoadControl(void);
+void BootReloadConfigFromFlash(void);
+void BootWriteProgress(uint8_t progress);
+void BootSwitchConfiguredPage(uint16_t page_addr);
 uint8_t BootCodeCheck(uint16_t start_block);
 void BootEnterUpgradeMode(void);
 

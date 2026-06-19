@@ -20,6 +20,9 @@
 #define otaSTEP_WAIT_DATA 0x50U
 #define otaSTEP_WAIT_RESULT_ACK 0x62U
 #define otaTIMEOUT_RELOAD 200U
+#define otaDATA_START_BLOCK 64U
+#define otaHANDSHAKE_LEN 5U
+#define otaC3_HEADER_MAGIC 0x43335AA5UL
 
 #define otaNAND_START_ADDR 0x04000000UL
 #define otaNOR_RESERVED_ID 21U
@@ -35,17 +38,17 @@ static uint8_t OtaDownloadCompleteFlag;
 static uint8_t OtaFrameActivityFlag;
 
 /**
- * @brief 读取大端16位数值。
+ * @brief 从xdata缓冲读取大端16位数值。
  */
-static uint16_t OtaReadBe16(uint8_t *buf)
+static uint16_t OtaReadBe16(uint8_t xdata *buf)
 {
     return ((uint16_t)buf[0] << 8) | (uint16_t)buf[1];
 }
 
 /**
- * @brief 读取大端32位数值。
+ * @brief 从xdata缓冲读取大端32位数值。
  */
-static uint32_t OtaReadBe32(uint8_t *buf)
+static uint32_t OtaReadBe32(uint8_t xdata *buf)
 {
     return ((uint32_t)buf[0] << 24) |
            ((uint32_t)buf[1] << 16) |
@@ -74,9 +77,9 @@ static void OtaWriteBe32(uint8_t *buf, uint32_t value)
 }
 
 /**
- * @brief 计算Modbus风格CRC16。
+ * @brief 计算xdata缓冲的Modbus风格CRC16。
  */
-static uint16_t OtaCrc16(uint8_t *update_data, uint16_t len)
+static uint16_t OtaCrc16(uint8_t xdata *update_data, uint16_t len)
 {
     uint16_t crc;
     uint16_t i;
@@ -223,7 +226,8 @@ static void OtaStartNandWrite(uint32_t nand_addr, uint16_t vp_addr, uint16_t blo
     cmd[1] = 0x04U;
     OtaWriteBe32(&cmd[2], nand_addr);
     OtaWriteBe16(&cmd[6], vp_addr);
-    OtaWriteBe16(&cmd[8], block_count);
+    cmd[8] = (uint8_t)block_count;
+    cmd[9] = (uint8_t)(block_count >> 8);
     cmd[10] = 0U;
     cmd[11] = 0U;
 
@@ -279,7 +283,7 @@ static void OtaClearWorkBlock(void)
 /**
  * @brief 将OTA分包载荷拷贝到共用4KB工作缓存。
  */
-static void OtaCopyPacketToWorkBlock(uint8_t *packet_data, uint16_t packet_len)
+static void OtaCopyPacketToWorkBlock(uint8_t xdata *packet_data, uint16_t packet_len)
 {
     uint16_t i;
 
@@ -306,6 +310,47 @@ static void OtaSetTimeout(uint8_t step)
 {
     OtaStep = step;
     OtaTimeout = otaTIMEOUT_RELOAD;
+}
+
+/**
+ * @brief 按下载字节数更新升级进度。
+ */
+static void OtaUpdateDownloadProgress(uint16_t packet_len)
+{
+    uint32_t progress;
+
+    OtaStatus.downloaded_size += packet_len;
+    if(OtaStatus.all_size == 0UL)
+    {
+        return;
+    }
+    if(OtaStatus.downloaded_size > OtaStatus.all_size)
+    {
+        OtaStatus.downloaded_size = OtaStatus.all_size;
+    }
+
+    progress = (OtaStatus.downloaded_size * 100UL) / OtaStatus.all_size;
+    if(progress > 100UL)
+    {
+        progress = 100UL;
+    }
+
+    BootWriteProgress((uint8_t)progress);
+}
+
+/**
+ * @brief 发送升级握手指令。
+ */
+static void OtaSendHandshake(void)
+{
+    uint8_t handshake[otaHANDSHAKE_LEN];
+
+    handshake[0] = 0xAAU;
+    handshake[1] = 0xBBU;
+    handshake[2] = 0x00U;
+    handshake[3] = 0x01U;
+    handshake[4] = 0xF3U;
+    UartSendData(&Uart5, handshake, otaHANDSHAKE_LEN);
 }
 
 /**
@@ -367,7 +412,7 @@ static void OtaSendData06(uint8_t result)
 /**
  * @brief 校验05数据分包CRC16。
  */
-static uint8_t OtaPacketCrc16Ok(uint8_t *frame, uint16_t packet_len)
+static uint8_t OtaPacketCrc16Ok(uint8_t xdata *frame, uint16_t packet_len)
 {
     uint16_t crc_calc;
     uint16_t crc_recv;
@@ -392,7 +437,7 @@ void OtaInit(void)
         ctx[i] = 0U;
     }
 
-    OtaStatus.flash_start_num = 64U;
+    OtaStatus.flash_start_num = otaDATA_START_BLOCK;
     OtaStep = otaSTEP_IDLE;
     OtaTimeout = 0U;
     OtaLastResult = 2U;
@@ -402,7 +447,7 @@ void OtaInit(void)
 /**
  * @brief 处理04文件信息命令。
  */
-static void OtaHandleFileInfo(uint8_t *frame, uint16_t len)
+static void OtaHandleFileInfo(uint8_t xdata *frame, uint16_t len)
 {
     uint8_t name_len;
     uint16_t status_index;
@@ -446,6 +491,7 @@ static void OtaHandleFileInfo(uint8_t *frame, uint16_t len)
     OtaStatus.now_num = frame[6];
     OtaStatus.off_position = 0UL;
     OtaStatus.off_len = otaNAND_BLOCK_BYTES;
+    OtaStatus.all_size = OtaReadBe32(&frame[7]);
     file = &OtaStatus.file[OtaStatus.now_num];
     file->itype = frame[11];
     file->apply = frame[12];
@@ -466,7 +512,7 @@ static void OtaHandleFileInfo(uint8_t *frame, uint16_t len)
 /**
  * @brief 将1个分包载荷写入NAND。
  */
-static void OtaWritePacketToNand(uint8_t *frame, uint16_t packet_len)
+static void OtaWritePacketToNand(uint8_t xdata *frame, uint16_t packet_len)
 {
     uint16_t vp_addr;
     uint32_t now_packet;
@@ -490,6 +536,7 @@ static void OtaWritePacketToNand(uint8_t *frame, uint16_t packet_len)
     OtaWaitDgusCmdIdle(sysDGUS_NAND_CMD_ADDR);
     nand_addr = otaNAND_START_ADDR + (now_packet * otaNAND_BLOCK_BYTES);
     OtaStartNandWrite(nand_addr, vp_addr, 1U);
+    OtaUpdateDownloadProgress(packet_len);
 }
 
 /**
@@ -527,7 +574,7 @@ static uint8_t OtaFileCrcOk(void)
 /**
  * @brief 处理05分包数据命令。
  */
-static void OtaHandlePacketData(uint8_t *frame, uint16_t len)
+static void OtaHandlePacketData(uint8_t xdata *frame, uint16_t len)
 {
     uint16_t payload_len;
     OtaFileInfo *file;
@@ -602,7 +649,7 @@ static void OtaHandleFileResultAck(void)
 /**
  * @brief 将1帧AB CD数据分发到OTA状态机。
  */
-void OtaReceive(uint8_t *frame, uint16_t len)
+void OtaReceive(uint8_t xdata *frame, uint16_t len)
 {
     uint16_t payload_len;
 
@@ -809,25 +856,25 @@ void OtaActionFromDownload(void)
 }
 
 /**
- * @brief 上电后等待UART5恢复指令。
- * @return 窗口期内收到恢复指令或VP升级标志时返回1，否则返回0。
+ * @brief 上电后先等待UART5 recovery控制帧。
  */
-uint8_t BootWaitRecoveryCommand(void)
+void BootWaitRecoveryCommand(void)
 {
     uint32_t elapsed_ms;
-    uint8_t recovery_requested;
+    uint8_t recovery_type;
+    uint8_t control_buf[BOOT_CTRL_BYTES];
 
     elapsed_ms = 0UL;
-    recovery_requested = 0U;
 
     Uart5Init(uartUART5_BAUDRATE);
     TimerInit();
 
     while(elapsed_ms < BOOT_RECOVERY_WINDOW_MS)
     {
-        if((UartRecoveryRequested() != 0U) || (BootIsUpgradeRequested() != 0U))
+        recovery_type = UartRecoveryGetControl(control_buf);
+        if(recovery_type != UART_RECOVERY_NONE)
         {
-            recovery_requested = 1U;
+            BootSetControl(control_buf, 1U);
             break;
         }
 
@@ -837,8 +884,7 @@ uint8_t BootWaitRecoveryCommand(void)
 
     TimerStop();
     Uart5Stop();
-
-    return recovery_requested;
+    BootReloadConfigFromFlash();
 }
 
 /**
@@ -854,6 +900,9 @@ void BootEnterUpgradeMode(void)
     (void)OtaConsumeActivity();
     Uart5Init(uartUART5_BAUDRATE);
     TimerInit();
+    BootWriteProgress(0U);
+    BootSwitchConfiguredPage(BOOT_UPGRADE_PAGE_ADDR);
+    OtaSendHandshake();
 
     while(idle_ms < BOOT_UPGRADE_IDLE_TIMEOUT_MS)
     {
@@ -862,11 +911,16 @@ void BootEnterUpgradeMode(void)
 
         if(OtaDownloadComplete() != 0U)
         {
+            OtaActionFromDownload();
+            BootWriteProgress(100U);
+            BootSwitchConfiguredPage(BOOT_FINISH_PAGE_ADDR);
+            (void)BootWaitLoadCommand(BOOT_POST_UPGRADE_LOAD_TIMEOUT_MS);
             TimerStop();
             Uart5Stop();
-            OtaActionFromDownload();
-            BootClearControl();
-            (void)BootWaitLoadCommand(BOOT_POST_UPGRADE_LOAD_TIMEOUT_MS);
+            SoftReset();
+            while(1)
+            {
+            }
             return;
         }
 

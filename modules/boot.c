@@ -7,6 +7,7 @@
  */
 
 #include "boot.h"
+#include "uart.h"
 
 #define bootAPP_DATA_BYTES 65280UL
 #define bootAPP_DWORD_COUNT (uint16_t)(bootAPP_DATA_BYTES / 4UL)
@@ -16,12 +17,11 @@
 #define bootCODE_TARGET_VP_START 0x10000UL
 #define bootCODE_COPY_BLOCK_WORDS 0x0800U
 #define bootCODE_COPY_BLOCK_COUNT 16U
-#define bootCTRL_BYTES 4U
 
 static uint8_t xdata BootVpF000Cache[bootF000_CACHE_BYTES];
 
 /**
- * @brief 从VP 0x00DD读取4字节启动控制值。
+ * @brief 从VP 0x0020读取4字节启动控制值。
  * @param[out] control_buf 4字节控制缓存。
  */
 static void BootReadControl(uint8_t *control_buf)
@@ -30,12 +30,111 @@ static void BootReadControl(uint8_t *control_buf)
 }
 
 /**
- * @brief 判断VP 0x00DD是否请求进入升级模式。
+ * @brief 读取1个VP字。
+ * @param[in] addr VP字地址。
+ * @return VP字值。
+ */
+static uint16_t BootReadVpWord(uint16_t addr)
+{
+    uint8_t buf[2];
+
+    read_dgus_vp(addr, buf, 1U);
+    return ((uint16_t)buf[0] << 8) | (uint16_t)buf[1];
+}
+
+/**
+ * @brief 写入1个VP字。
+ * @param[in] addr VP字地址。
+ * @param[in] value VP字值。
+ */
+static void BootWriteVpWord(uint16_t addr, uint16_t value)
+{
+    uint8_t buf[2];
+
+    buf[0] = (uint8_t)(value >> 8);
+    buf[1] = (uint8_t)value;
+    write_dgus_vp(addr, buf, 1U);
+}
+
+/**
+ * @brief 写入启动控制值，并可同步保存到片内NOR Flash。
+ * @param[in] control_buf 4字节控制值。
+ * @param[in] persist 非0时保存到NOR Flash。
+ */
+void BootSetControl(uint8_t *control_buf, uint8_t persist)
+{
+    if(control_buf == NULL)
+    {
+        return;
+    }
+
+    write_dgus_vp(BOOT_CTRL_ADDR, control_buf, 2U);
+    if(persist != 0U)
+    {
+        DgusToFlash((uint32_t)BOOT_CTRL_ADDR, BOOT_CTRL_ADDR, 2U);
+    }
+}
+
+/**
+ * @brief 写入默认用户程序起始块控制值。
+ */
+void BootSetDefaultLoadControl(void)
+{
+    uint8_t control_buf[BOOT_CTRL_BYTES];
+
+    control_buf[0] = BOOT_CTRL_LOAD_0;
+    control_buf[1] = BOOT_CTRL_LOAD_1;
+    control_buf[2] = (uint8_t)(BOOT_DEFAULT_START_BLOCK >> 8);
+    control_buf[3] = (uint8_t)BOOT_DEFAULT_START_BLOCK;
+    BootSetControl(control_buf, 1U);
+}
+
+/**
+ * @brief 从片内NOR Flash恢复BOOT配置到DGUS VP。
+ */
+void BootReloadConfigFromFlash(void)
+{
+    FlashToDgus((uint32_t)BOOT_CTRL_ADDR, BOOT_CTRL_ADDR, BOOT_CONFIG_WORDS);
+}
+
+/**
+ * @brief 写入升级进度。
+ * @param[in] progress 0到100。
+ */
+void BootWriteProgress(uint8_t progress)
+{
+    if(progress > 100U)
+    {
+        progress = 100U;
+    }
+
+    BootWriteVpWord(BOOT_PROGRESS_ADDR, (uint16_t)progress);
+}
+
+/**
+ * @brief 按配置决定是否切换到指定配置地址中的页面。
+ * @param[in] page_addr 存放页面ID的VP地址。
+ */
+void BootSwitchConfiguredPage(uint16_t page_addr)
+{
+    uint16_t page_id;
+
+    if(BootReadVpWord(BOOT_PAGE_SWITCH_ADDR) != BOOT_PAGE_SWITCH_VALUE)
+    {
+        return;
+    }
+
+    page_id = BootReadVpWord(page_addr);
+    SwitchPageById(page_id);
+}
+
+/**
+ * @brief 判断VP 0x0020是否请求进入升级模式。
  * @return 控制值为5A A5 5A A5时返回1，否则返回0。
  */
 uint8_t BootIsUpgradeRequested(void)
 {
-    uint8_t control_buf[bootCTRL_BYTES];
+    uint8_t control_buf[BOOT_CTRL_BYTES];
 
     BootReadControl(control_buf);
     if((control_buf[0] == BOOT_CTRL_UPGRADE_0) &&
@@ -50,12 +149,12 @@ uint8_t BootIsUpgradeRequested(void)
 }
 
 /**
- * @brief 判断VP 0x00DD是否为AA55动态加载命令。
+ * @brief 判断VP 0x0020是否为AA55动态加载命令。
  * @return 控制值以AA 55开头时返回1，否则返回0。
  */
 uint8_t BootControlIsLoadCommand(void)
 {
-    uint8_t control_buf[bootCTRL_BYTES];
+    uint8_t control_buf[BOOT_CTRL_BYTES];
 
     BootReadControl(control_buf);
     if((control_buf[0] == BOOT_CTRL_LOAD_0) &&
@@ -68,12 +167,12 @@ uint8_t BootControlIsLoadCommand(void)
 }
 
 /**
- * @brief 从VP 0x00DD解析NOR起始块。
+ * @brief 从VP 0x0020解析NOR起始块。
  * @return 存在AA55xxxx时返回动态块号，否则返回默认块号。
  */
 uint16_t BootResolveStartBlock(void)
 {
-    uint8_t control_buf[bootCTRL_BYTES];
+    uint8_t control_buf[BOOT_CTRL_BYTES];
 
     BootReadControl(control_buf);
     if((control_buf[0] == BOOT_CTRL_LOAD_0) &&
@@ -93,34 +192,51 @@ uint16_t BootResolveStartBlock(void)
 uint8_t BootWaitLoadCommand(uint32_t timeout_ms)
 {
     uint32_t elapsed_ms;
+    uint8_t control_buf[BOOT_CTRL_BYTES];
+    uint8_t recovery_type;
 
     elapsed_ms = 0UL;
     while(elapsed_ms < timeout_ms)
     {
+        recovery_type = UartRecoveryGetControl(control_buf);
+        if(recovery_type != 0U)
+        {
+            if((control_buf[0] == BOOT_CTRL_LOAD_0) &&
+               (control_buf[1] == BOOT_CTRL_LOAD_1))
+            {
+                BootSetControl(control_buf, 1U);
+                return 1U;
+            }
+        }
+
         if(BootControlIsLoadCommand() != 0U)
         {
+            BootReadControl(control_buf);
+            BootSetControl(control_buf, 1U);
             return 1U;
         }
 
+        UartReadFrame(&Uart5);
         delay_ms(10U);
         elapsed_ms += 10UL;
     }
 
+    BootSetDefaultLoadControl();
     return 0U;
 }
 
 /**
- * @brief 清除VP 0x00DD启动控制值。
+ * @brief 清除VP 0x0020启动控制值并同步到NOR Flash。
  */
 void BootClearControl(void)
 {
-    uint8_t zero_buf[bootCTRL_BYTES];
+    uint8_t zero_buf[BOOT_CTRL_BYTES];
 
     zero_buf[0] = 0U;
     zero_buf[1] = 0U;
     zero_buf[2] = 0U;
     zero_buf[3] = 0U;
-    write_dgus_vp(BOOT_CTRL_ADDR, zero_buf, 2U);
+    BootSetControl(zero_buf, 1U);
 }
 
 /**

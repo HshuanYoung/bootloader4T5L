@@ -28,6 +28,21 @@ static void DgusClampWordLength(uint16_t addr, uint16_t *len)
 }
 
 /**
+ * @brief 等待DGUS命令寄存器空闲。
+ * @param[in] cmd_addr 命令VP地址。
+ */
+static void DgusWaitCmdIdle(uint16_t cmd_addr)
+{
+    uint8_t cmd_state[4];
+
+    do
+    {
+        delay_ms(2U);
+        read_dgus_vp(cmd_addr, cmd_state, 2U);
+    }while(cmd_state[0] != 0U);
+}
+
+/**
  * @brief 读取DGUS VP数据。
  * @param[in] addr VP字地址。
  * @param[out] buf 目标字节缓存。
@@ -218,6 +233,104 @@ void delay_ms(uint16_t ms)
             delay_us(1U);
         }
     }
+}
+
+/**
+ * @brief 将片内NOR Flash数据读回DGUS VP。
+ * @param[in] flash_addr 片内NOR Flash字地址。
+ * @param[in] dgus_vp_addr DGUS VP目标地址。
+ * @param[in] len_words 读取字长度。
+ */
+void FlashToDgus(uint32_t flash_addr, uint16_t dgus_vp_addr, uint16_t len_words)
+{
+    uint8_t cmd[8];
+
+    if(len_words == 0U)
+    {
+        return;
+    }
+
+    cmd[0] = 0x5AU;
+    cmd[1] = (uint8_t)(flash_addr >> 16);
+    cmd[2] = (uint8_t)(flash_addr >> 8);
+    cmd[3] = (uint8_t)flash_addr;
+    cmd[4] = (uint8_t)(dgus_vp_addr >> 8);
+    cmd[5] = (uint8_t)dgus_vp_addr;
+    cmd[6] = (uint8_t)(len_words >> 8);
+    cmd[7] = (uint8_t)len_words;
+
+    write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 4U);
+    DgusWaitCmdIdle(sysDGUS_FLASH_RW_CMD_ADDR);
+    delay_ms(50U);
+}
+
+/**
+ * @brief 将DGUS VP数据写入片内NOR Flash。
+ * @param[in] flash_addr 片内NOR Flash字地址。
+ * @param[in] dgus_vp_addr DGUS VP源地址。
+ * @param[in] len_words 写入字长度。
+ */
+void DgusToFlash(uint32_t flash_addr, uint16_t dgus_vp_addr, uint16_t len_words)
+{
+    uint8_t cmd[8];
+    uint8_t ea_state;
+
+    if(len_words == 0U)
+    {
+        return;
+    }
+
+    cmd[0] = 0xA5U;
+    cmd[1] = (uint8_t)(flash_addr >> 16);
+    cmd[2] = (uint8_t)(flash_addr >> 8);
+    cmd[3] = (uint8_t)flash_addr;
+    cmd[4] = (uint8_t)(dgus_vp_addr >> 8);
+    cmd[5] = (uint8_t)dgus_vp_addr;
+    cmd[6] = (uint8_t)(len_words >> 8);
+    cmd[7] = (uint8_t)len_words;
+
+    ea_state = EA;
+    EA = 0U;
+    write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 4U);
+    DgusWaitCmdIdle(sysDGUS_FLASH_RW_CMD_ADDR);
+    EA = ea_state;
+    delay_ms(50U);
+}
+
+/**
+ * @brief 按页面ID切换DGUS页面，等待OS完成切页命令。
+ * @param[in] page_id 页面ID。
+ */
+void SwitchPageById(uint16_t page_id)
+{
+    uint8_t cmd[4];
+    uint8_t state[2];
+
+    cmd[0] = 0x5AU;
+    cmd[1] = 0x01U;
+    cmd[2] = (uint8_t)(page_id >> 8);
+    cmd[3] = (uint8_t)page_id;
+    write_dgus_vp(sysDGUS_PIC_SET_ADDR, cmd, 2U);
+
+    do
+    {
+        delay_us(100U);
+        read_dgus_vp(sysDGUS_PIC_SET_ADDR, state, 1U);
+    }while(state[0] != 0U);
+}
+
+/**
+ * @brief 触发T5L软复位。
+ */
+void SoftReset(void)
+{
+    uint8_t cmd[4];
+
+    cmd[0] = 0x55U;
+    cmd[1] = 0xAAU;
+    cmd[2] = 0x5AU;
+    cmd[3] = 0xA5U;
+    write_dgus_vp(sysDGUS_BOOT_RESET_ADDR, cmd, 2U);
 }
 
 /**

@@ -29,9 +29,17 @@ typedef signed long int32_t;
 
 /**
  * @brief BOOT屏时钟配置。
- * @details 原BOOT工程按2K时钟配置构建。
+ * @details _2K_RATIO为1时使用2K主频，否则使用普通主频。
  */
+#ifndef _2K_RATIO
+#define _2K_RATIO 1
+#endif
+
+#if _2K_RATIO == 1
 #define sysFOSC 383385600UL
+#else
+#define sysFOSC 206438400UL
+#endif
 #define sysFCLK sysFOSC
 
 /**
@@ -42,15 +50,17 @@ typedef signed long int32_t;
 /**
  * @brief 启动控制字配置。
  */
-#define BOOT_CTRL_ADDR 0x00DDU
+#define BOOT_CTRL_ADDR 0x0020U
+#define BOOT_PAGE_SWITCH_ADDR 0x0022U
+#define BOOT_PROGRESS_ADDR 0x0023U
+#define BOOT_UPGRADE_PAGE_ADDR 0x0024U
+#define BOOT_FINISH_PAGE_ADDR 0x0025U
+#define BOOT_PAGE_SWITCH_VALUE 0x5AA5U
+#define BOOT_CONFIG_WORDS 6U
 #define BOOT_DEFAULT_START_BLOCK 112U
 #define BOOT_RECOVERY_WINDOW_MS 500UL
 #define BOOT_UPGRADE_IDLE_TIMEOUT_MS 30000UL
 #define BOOT_POST_UPGRADE_LOAD_TIMEOUT_MS 30000UL
-#define BOOT_RECOVERY_CMD_0 0x5AU
-#define BOOT_RECOVERY_CMD_1 0xA5U
-#define BOOT_RECOVERY_CMD_2 0x5AU
-#define BOOT_RECOVERY_CMD_3 0xA5U
 
 /**
  * @brief Timer0 1ms节拍配置。

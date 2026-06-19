@@ -23,6 +23,9 @@ typedef struct UartxDefine
 
 #define UART_NON_REC 0U
 #define UART_RECING 1U
+#define UART_RECOVERY_NONE 0U
+#define UART_RECOVERY_UPGRADE 1U
+#define UART_RECOVERY_LOAD 2U
 
 extern UART_TYPE Uart5;
 
@@ -31,5 +34,6 @@ void Uart5Stop(void);
 void UartSendData(UART_TYPE *uart, uint8_t *buf, uint16_t len);
 void UartReadFrame(UART_TYPE *uart);
 uint8_t UartRecoveryRequested(void);
+uint8_t UartRecoveryGetControl(uint8_t *control_buf);
 
 #endif /* UART_H */

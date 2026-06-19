@@ -37,11 +37,13 @@ typedef struct
     uint16_t flash_start_num;
     uint32_t off_position;
     uint32_t off_len;
+    uint32_t all_size;
+    uint32_t downloaded_size;
     OtaFileInfo file[otaDOWNLOAD_MAX];
 } OtaContext;
 
 void OtaInit(void);
-void OtaReceive(uint8_t *frame, uint16_t len);
+void OtaReceive(uint8_t xdata *frame, uint16_t len);
 void OtaTask(void);
 void OtaTimerTick1ms(void);
 uint8_t OtaDownloadComplete(void);

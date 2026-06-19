@@ -12,6 +12,8 @@
 #include "T5LOSConfig.h"
 
 #define sysDGUS_FLASH_RW_CMD_ADDR 0x0008U
+#define sysDGUS_BOOT_RESET_ADDR 0x0004U
+#define sysDGUS_PIC_SET_ADDR 0x0084U
 #define sysDGUS_NAND_CMD_ADDR 0x00AAU
 #define sysDGUS_NAND_CRC_ADDR 0x00AEU
 
@@ -34,5 +36,9 @@ void delay_us(uint16_t us);
 void delay_ms(uint16_t ms);
 
 void vpExchange(VP_EXCHANGE *exchange_msg);
+void FlashToDgus(uint32_t flash_addr, uint16_t dgus_vp_addr, uint16_t len_words);
+void DgusToFlash(uint32_t flash_addr, uint16_t dgus_vp_addr, uint16_t len_words);
+void SwitchPageById(uint16_t page_id);
+void SoftReset(void);
 
 #endif /* SYS_H */
