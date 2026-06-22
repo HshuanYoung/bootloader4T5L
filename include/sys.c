@@ -12,6 +12,11 @@
 #define dgusCMD_WAIT_STEP_MS 10U
 #define dgusFLASH_CMD_WAIT_TIMEOUT_MS 3000U
 
+uint16_t sys_2k_ratio = 0U;
+uint32_t sysFOSC = sysNORMAL_FOSC;
+uint32_t sysFCLK = sysNORMAL_FOSC;
+uint16_t timeT0_TICK = sysT0_TICK_FROM_FOSC(sysNORMAL_FOSC);
+
 static uint8_t DgusWaitCmdIdle(uint32_t cmd_addr, uint16_t timeout_ms)
 {
     uint8_t cmd_state[2];
@@ -214,6 +219,33 @@ void DgusToFlash(uint32_t flash_addr, uint16_t dgus_vp_addr, uint16_t len_words)
     write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 1U);
     (void)DgusWaitCmdIdle(sysDGUS_FLASH_RW_CMD_ADDR, dgusFLASH_CMD_WAIT_TIMEOUT_MS);
     delay_ms(FLASH_ACCESS_CYCLE);
+}
+
+/**
+ * @brief 从lib配置读取屏幕比例并设置运行时主频。
+ */
+void SysLoadClockFromLib(void)
+{
+    uint16_t screen_ratio;
+
+    screen_ratio = 0xFFFFU;
+    FlashToDgus((uint32_t)sysLIB_SCREEN_RATIO_ADDR, sysLIB_SCREEN_RATIO_ADDR, 2U);
+    read_dgus_vp(sysLIB_SCREEN_RATIO_ADDR, (uint8_t *)&screen_ratio, 1U);
+
+    if(screen_ratio == sysLIB_SCREEN_RATIO_2K)
+    {
+        sys_2k_ratio = 1U;
+        sysFOSC = sys2K_FOSC;
+        sysFCLK = sys2K_FOSC;
+        timeT0_TICK = sysT0_TICK_FROM_FOSC(sys2K_FOSC);
+    }
+    else
+    {
+        sys_2k_ratio = 0U;
+        sysFOSC = sysNORMAL_FOSC;
+        sysFCLK = sysNORMAL_FOSC;
+        timeT0_TICK = sysT0_TICK_FROM_FOSC(sysNORMAL_FOSC);
+    }
 }
 
 /**

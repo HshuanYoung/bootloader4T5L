@@ -86,11 +86,14 @@ void Uart5Init(uint32_t baudrate)
     SCON3T = 0x80U;
     SCON3R = 0x80U;
 
-    #if _2K_RATIO == 1
-    divider = sysFCLK / 16UL / baudrate;
-    #else
-    divider = sysFCLK / 8UL / baudrate;
-    #endif /* _2K_RATIO */
+    if(sys_2k_ratio != 0U)
+    {
+        divider = sysFCLK / 16UL / baudrate;
+    }
+    else
+    {
+        divider = sysFCLK / 8UL / baudrate;
+    }
     BODE3_DIV_H = (uint8_t)(divider >> 8);
     BODE3_DIV_L = (uint8_t)divider;
 

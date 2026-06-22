@@ -34,18 +34,16 @@ typedef signed long int32_t;
 
 /**
  * @brief BOOT屏时钟配置。
- * @details _2K_RATIO为1时使用2K主频，否则使用普通主频。
+ * @details 启动时从lib配置地址读取screen_ratio，0表示2K屏。
  */
-#ifndef _2K_RATIO
-#define _2K_RATIO 0
-#endif
+#define sysLIB_SCREEN_RATIO_ADDR 0x0580U
+#define sysLIB_SCREEN_RATIO_2K 0x0000U
+#define sys2K_FOSC 383385600UL
+#define sysNORMAL_FOSC 206438400UL
 
-#if _2K_RATIO == 1
-#define sysFOSC 383385600UL
-#else
-#define sysFOSC 206438400UL
-#endif
-#define sysFCLK sysFOSC
+extern uint16_t sys_2k_ratio;
+extern uint32_t sysFOSC;
+extern uint32_t sysFCLK;
 
 /**
  * @brief Flash操作后DGUS命令轮询延时，单位毫秒。
@@ -70,7 +68,8 @@ typedef signed long int32_t;
 /**
  * @brief Timer0 1ms节拍配置。
  */
-#define timeT0_TICK (65536UL - sysFOSC / 12UL / 1000UL)
+#define sysT0_TICK_FROM_FOSC(fosc) ((uint16_t)(65536UL - (fosc) / 12UL / 1000UL))
+extern uint16_t timeT0_TICK;
 
 /**
  * @brief UART5 OTA传输配置。

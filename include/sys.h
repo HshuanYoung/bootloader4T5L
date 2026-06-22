@@ -35,6 +35,7 @@ void write_dgus_vp ( uint32_t  addr, uint8_t *buf, uint16_t len );
 void delay_us(uint16_t us);
 void delay_ms(uint16_t ms);
 
+void SysLoadClockFromLib(void);
 void vpExchange(VP_EXCHANGE *exchange_msg);
 void FlashToDgus(uint32_t flash_addr, uint16_t dgus_vp_addr, uint16_t len_words);
 void DgusToFlash(uint32_t flash_addr, uint16_t dgus_vp_addr, uint16_t len_words);

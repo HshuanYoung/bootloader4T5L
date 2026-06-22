@@ -17,6 +17,7 @@ void main(void)
     uint8_t code_valid;
     uint8_t upgrade_requested;
 
+    SysLoadClockFromLib();
     DBG_INIT();
     DBG_LOG_LINE("[BOOT] start");
     BootWaitRecoveryCommand();

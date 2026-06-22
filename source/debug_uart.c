@@ -62,9 +62,11 @@ void DebugUart2Init(void)
 
     PCON &= 0x7FU;
     PCON |= 0x80U;
-#if _2K_RATIO == 1
-    PCON &= 0x7FU;
-#endif /* _2K_RATIO */
+
+    if(sys_2k_ratio)
+    {
+        PCON |= 0x80U;
+    }
 
     if((PCON & 0x80U) != 0U)
     {
