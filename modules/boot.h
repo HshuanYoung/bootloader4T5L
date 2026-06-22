@@ -26,7 +26,6 @@ uint8_t BootWaitLoadCommand(uint32_t timeout_ms);
 void BootWaitRecoveryCommand(void);
 void BootClearControl(void);
 void BootSetControl(uint8_t *control_buf, uint8_t persist);
-void BootSetDefaultLoadControl(void);
 void BootWriteProgress(uint8_t progress);
 void BootSwitchConfiguredPage(uint16_t page_addr);
 uint8_t BootCodeCheck(uint16_t start_block);

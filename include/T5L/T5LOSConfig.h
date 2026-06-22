@@ -27,12 +27,17 @@ typedef signed long int32_t;
 #define FALSE 0U
 #define __NOP()
 
+
+#define SysEnterCritical()    EA=0;
+#define SysExitCritical()     EA=1;
+
+
 /**
  * @brief BOOT屏时钟配置。
  * @details _2K_RATIO为1时使用2K主频，否则使用普通主频。
  */
 #ifndef _2K_RATIO
-#define _2K_RATIO 1
+#define _2K_RATIO 0
 #endif
 
 #if _2K_RATIO == 1

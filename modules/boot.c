@@ -83,20 +83,6 @@ void BootSetControl(uint8_t *control_buf, uint8_t persist)
     }
 }
 
-/**
- * @brief 写入默认用户程序起始块控制值。
- */
-void BootSetDefaultLoadControl(void)
-{
-    uint8_t control_buf[BOOT_CTRL_BYTES];
-
-    DBG_LOG_U16("[BOOT] default load block=", BOOT_DEFAULT_START_BLOCK);
-    control_buf[0] = BOOT_CTRL_LOAD_0;
-    control_buf[1] = BOOT_CTRL_LOAD_1;
-    control_buf[2] = (uint8_t)(BOOT_DEFAULT_START_BLOCK >> 8);
-    control_buf[3] = (uint8_t)BOOT_DEFAULT_START_BLOCK;
-    BootSetControl(control_buf, 1U);
-}
 
 /**
  * @brief 写入升级进度。
@@ -212,7 +198,7 @@ uint16_t BootResolveStartBlock(void)
 /**
  * @brief 等待升级端写入AA55动态加载命令。
  * @param[in] timeout_ms 等待时间，单位毫秒。
- * @return 检测到AA55xxxx时返回1，否则返回0。
+ * @return 检测到AA55xxxx时返回1，否则清空控制值并返回0。
  */
 uint8_t BootWaitLoadCommand(uint32_t timeout_ms)
 {
@@ -265,7 +251,7 @@ uint8_t BootWaitLoadCommand(uint32_t timeout_ms)
     }
 
     DBG_LOG_LINE("[BOOT] wait load timeout");
-    BootSetDefaultLoadControl();
+    BootClearControl();
     return 0U;
 }
 
@@ -412,21 +398,6 @@ static uint16_t BootCodeCrc16(void)
 }
 
 /**
- * @brief 等待DGUS命令寄存器空闲。
- * @param[in] cmd_addr 命令VP地址。
- */
-static void BootWaitDgusCmdIdle(uint16_t cmd_addr)
-{
-    uint8_t cmd_state[4];
-
-    do
-    {
-        delay_ms(2U);
-        read_dgus_vp(cmd_addr, cmd_state, 2U);
-    }while(cmd_state[0] != 0U);
-}
-
-/**
  * @brief 将1个4KB NOR代码块读入暂存VP区域。
  * @param[in] flash_addr 源NOR字地址。
  */
@@ -447,9 +418,16 @@ static void BootReadNorCodeBlock(uint32_t flash_addr)
     cmd[10] = 0U;
     cmd[11] = 0U;
 
-    write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 4U);
-    BootWaitDgusCmdIdle(sysDGUS_FLASH_RW_CMD_ADDR);
-    delay_ms(50U);
+    write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR + 1U, &cmd[2], 3U);
+    write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 1U);
+    SysEnterCritical();
+    delay_ms(100);
+    while (cmd[0])
+    {
+        delay_ms(10);
+        read_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 1);
+    }
+    SysExitCritical();
 }
 
 /**

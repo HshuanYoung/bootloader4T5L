@@ -123,19 +123,6 @@ static uint16_t OtaCeilDiv32(uint32_t value, uint32_t divisor)
     return (uint16_t)result;
 }
 
-/**
- * @brief 等待DGUS命令寄存器空闲。
- */
-static void OtaWaitDgusCmdIdle(uint16_t cmd_addr)
-{
-    uint8_t cmd_state[4];
-
-    do
-    {
-        delay_ms(2U);
-        read_dgus_vp(cmd_addr, cmd_state, 2U);
-    }while(cmd_state[0] != 0U);
-}
 
 /**
  * @brief 启动NAND到NOR的拷贝操作。
@@ -154,8 +141,12 @@ static void OtaCopyNandToNor(uint32_t nand_addr, uint8_t nor_id, uint16_t block_
     cmd[11] = 0U;
 
     write_dgus_vp(sysDGUS_NAND_CMD_ADDR, cmd, 6U);
-    OtaWaitDgusCmdIdle(sysDGUS_NAND_CMD_ADDR);
-    delay_ms(50U);
+    SysEnterCritical();
+    while (cmd[0])
+    {
+        delay_ms(10);
+        read_dgus_vp(sysDGUS_NAND_CMD_ADDR, cmd, 1);
+    }
 }
 
 /**
@@ -178,8 +169,13 @@ static void OtaReadNorToVp(uint8_t nor_id, uint32_t nor_offset,
     cmd[11] = 0U;
 
     write_dgus_vp(sysDGUS_NAND_CMD_ADDR, cmd, 6U);
-    OtaWaitDgusCmdIdle(sysDGUS_NAND_CMD_ADDR);
-    delay_ms(50U);
+    SysEnterCritical();
+    while (cmd[0])
+    {
+        delay_ms(10);
+        read_dgus_vp(sysDGUS_NAND_CMD_ADDR, cmd, 1);
+    }
+    SysExitCritical();
 }
 
 /**
@@ -203,8 +199,13 @@ static void OtaWriteF000ToNor(uint32_t flash_addr)
     cmd[11] = 0U;
 
     write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 4U);
-    OtaWaitDgusCmdIdle(sysDGUS_FLASH_RW_CMD_ADDR);
-    delay_ms(50U);
+    SysEnterCritical();
+    while (cmd[0])
+    {
+        delay_ms(10);
+        read_dgus_vp(sysDGUS_NAND_CMD_ADDR, cmd, 1);
+    }
+    SysExitCritical();
 }
 
 /**
@@ -222,8 +223,14 @@ static void OtaStartNandWrite(uint32_t nand_addr, uint16_t vp_addr, uint16_t blo
     cmd[9] = (uint8_t)(block_count >> 8);
     cmd[10] = 0U;
     cmd[11] = 0U;
-
     write_dgus_vp(sysDGUS_NAND_CMD_ADDR, cmd, 6U);
+    SysEnterCritical();
+    while (cmd[0])
+    {
+        delay_ms(10);
+        read_dgus_vp(sysDGUS_NAND_CMD_ADDR, cmd, 1);
+    }
+    SysExitCritical();
 }
 
 /**
@@ -241,8 +248,14 @@ static void OtaStartNandCrc32(uint32_t nand_addr, uint16_t block_count)
     cmd[9] = 0U;
     cmd[10] = 0U;
     cmd[11] = 0U;
-
     write_dgus_vp(sysDGUS_NAND_CMD_ADDR, cmd, 6U);
+    SysEnterCritical();
+    while (cmd[0])
+    {
+        delay_ms(10);
+        read_dgus_vp(sysDGUS_NAND_CMD_ADDR, cmd, 1);
+    }
+    SysExitCritical();
 }
 
 /**
@@ -330,7 +343,7 @@ static void OtaSendHandshake(void)
 
     DBG_LOG_LINE("[OTA] send handshake");
     handshake[0] = 0xAAU;
-    handshake[1] = 0xBBU;
+    handshake[1] = 0x55U;
     handshake[2] = 0x00U;
     handshake[3] = 0x01U;
     handshake[4] = 0xF3U;
@@ -556,8 +569,7 @@ static void OtaWritePacketToNand(uint8_t xdata *frame, uint16_t packet_len)
 
     OtaCopyPacketToWorkBlock(&frame[26], packet_len);
     write_dgus_vp(vp_addr, OtaVpBlock, otaHEADER_BYTES / 2U);
-
-    OtaWaitDgusCmdIdle(sysDGUS_NAND_CMD_ADDR);
+    
     nand_addr = otaNAND_START_ADDR + (now_packet * otaNAND_BLOCK_BYTES);
 #if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
     DebugLog("[OTA] write packet idx=");
@@ -612,9 +624,7 @@ static uint8_t OtaFileCrcOk(void)
     DebugLog("\r\n");
 #endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
 
-    OtaWaitDgusCmdIdle(sysDGUS_NAND_CMD_ADDR);
     OtaStartNandCrc32(nand_addr, blocks);
-    OtaWaitDgusCmdIdle(sysDGUS_NAND_CMD_ADDR);
     delay_ms(50U);
     crc32 = OtaReadNandCrc32();
 

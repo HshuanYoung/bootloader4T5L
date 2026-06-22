@@ -8,196 +8,96 @@
 
 #include "sys.h"
 
-#define dgusVP_ADDR_LIMIT 0xFFFFU
 #define dgusVP_COPY_LIMIT 0x20000UL
 
-/**
- * @brief 限制VP字长度，避免跨越16位DGUS VP窗口。
- * @param[in] addr 起始VP字地址。
- * @param[in,out] len 请求访问的VP字长度。
- */
-static void DgusClampWordLength(uint16_t addr, uint16_t *len)
+
+
+void read_dgus_vp(uint32_t addr,uint8_t *buf,uint8_t len)
 {
-    uint32_t len_limit;
+	uint32_t OS_addr = 0;
+	uint16_t OS_addr_offset = 0;
+	uint16_t OS_len = 0, OS_len_offset = 0;
 
-    len_limit = (uint32_t)dgusVP_ADDR_LIMIT - (uint32_t)addr + 1UL;
-    if(len_limit < (uint32_t)(*len))
+	OS_addr = addr >> 1;
+	OS_addr_offset = addr & 0x01;
+    ADR_H=(uint8_t)(OS_addr>>16);
+    ADR_M=(uint8_t)(OS_addr>>8);
+    ADR_L=(uint8_t)OS_addr;
+    ADR_INC=1;                 
+    RAMMODE=0xAF;               
+	while(!APP_ACK);     
+    if(OS_addr_offset)       
     {
-        *len = (uint16_t)len_limit;
-    }
-}
-
-/**
- * @brief 等待DGUS命令寄存器空闲。
- * @param[in] cmd_addr 命令VP地址。
- */
-static void DgusWaitCmdIdle(uint16_t cmd_addr)
-{
-    uint8_t cmd_state[4];
-
-    do
-    {
-        delay_ms(2U);
-        read_dgus_vp(cmd_addr, cmd_state, 2U);
-    }while(cmd_state[0] != 0U);
-}
-
-/**
- * @brief 读取DGUS VP数据。
- * @param[in] addr VP字地址。
- * @param[out] buf 目标字节缓存。
- * @param[in] len VP字长度。
- */
-void read_dgus_vp(uint16_t addr, uint8_t *buf, uint16_t len)
-{
-    uint16_t os_addr;
-    uint16_t os_addr_offset;
-    uint16_t os_len;
-    uint16_t os_len_offset;
-
-    if((buf == NULL) || (len == 0U))
-    {
-        return;
-    }
-
-    DgusClampWordLength(addr, &len);
-
-    os_addr = addr >> 1;
-    os_addr_offset = addr & 0x01U;
-
-#ifdef INTVPACTION
-    EA = 0;
-#endif /* INTVPACTION */
-
-    ADR_H = 0U;
-    ADR_M = (uint8_t)(os_addr >> 8);
-    ADR_L = (uint8_t)os_addr;
-    ADR_INC = 1U;
-    RAMMODE = 0xAFU;
-    while(!APP_ACK)
-    {
-    }
-
-    if(os_addr_offset != 0U)
-    {
-        APP_EN = 1U;
-        while(APP_EN)
-        {
-        }
-        *buf++ = DATA1;
-        *buf++ = DATA0;
+        APP_EN=1;
+        while(APP_EN); 
+        *buf++=DATA1;
+        *buf++=DATA0;              
         len--;
     }
-
-    os_len = len >> 1;
-    os_len_offset = len & 0x01U;
-    while(os_len-- != 0U)
+    OS_len=len>>1;
+    OS_len_offset=len&0x01;
+    while(OS_len--)
     {
-        APP_EN = 1U;
-        while(APP_EN)
-        {
-        }
-        *buf++ = DATA3;
-        *buf++ = DATA2;
-        *buf++ = DATA1;
-        *buf++ = DATA0;
-    }
-
-    if(os_len_offset != 0U)
-    {
-        APP_EN = 1U;
-        while(APP_EN)
-        {
-        }
-        *buf++ = DATA3;
-        *buf = DATA2;
-    }
-
-    RAMMODE = 0x00U;
-
-#ifdef INTVPACTION
-    EA = 1;
-#endif /* INTVPACTION */
+        APP_EN=1;
+        while(APP_EN);      
+        *buf++=DATA3;
+        *buf++=DATA2;
+        *buf++=DATA1;
+        *buf++=DATA0;                          
+    }   
+	if(OS_len_offset)
+	{          
+		APP_EN=1;
+		while(APP_EN);      
+		*buf++=DATA3;
+		*buf++=DATA2;              
+	} 
+    RAMMODE=0x00;           
 }
 
-/**
- * @brief 写入DGUS VP数据。
- * @param[in] addr VP字地址。
- * @param[in] buf 源字节缓存。
- * @param[in] len VP字长度。
- */
-void write_dgus_vp(uint16_t addr, uint8_t *buf, uint16_t len)
+
+void write_dgus_vp ( uint32_t  addr, uint8_t *buf, uint16_t len )
 {
-    uint16_t os_addr;
-    uint16_t os_addr_offset;
-    uint16_t os_len;
-    uint16_t os_len_offset;
+    uint8_t i;
+    uint8_t *p = buf;
+    i= ( unsigned char ) ( addr&0x01 );
 
-    if((buf == NULL) || (len == 0U))
+    ADR_H= ( unsigned char ) ( addr>>17 );
+    ADR_M= ( unsigned char ) ( addr>>9 );
+    ADR_L= ( unsigned char ) ( addr>>1 );
+    ADR_INC=0x01;
+    RAMMODE=0x8F;
+    while ( APP_ACK==0 );
+    if ( i && len>0 )
     {
-        return;
-    }
-
-    DgusClampWordLength(addr, &len);
-
-    os_addr = addr >> 1;
-    os_addr_offset = addr & 0x01U;
-
-#ifdef INTVPACTION
-    EA = 0;
-#endif /* INTVPACTION */
-
-    ADR_H = 0U;
-    ADR_M = (uint8_t)(os_addr >> 8);
-    ADR_L = (uint8_t)os_addr;
-    ADR_INC = 1U;
-    RAMMODE = 0x83U;
-    while(!APP_ACK)
-    {
-    }
-
-    if(os_addr_offset != 0U)
-    {
-        DATA1 = *buf++;
-        DATA0 = *buf++;
-        APP_EN = 1U;
-        while(APP_EN)
-        {
-        }
+        RAMMODE=0x83;
+        DATA1=*p++;
+        DATA0=*p++;
+        APP_EN=1;
+        while ( APP_EN==1 );
         len--;
     }
-
-    os_len = len >> 1;
-    os_len_offset = len & 0x01U;
-    RAMMODE = 0x8FU;
-    while(os_len-- != 0U)
+    RAMMODE=0x8F;
+    while ( len>=2 )
     {
-        DATA3 = *buf++;
-        DATA2 = *buf++;
-        DATA1 = *buf++;
-        DATA0 = *buf++;
-        APP_EN = 1U;
-        while(APP_EN)
-        {
-        }
+        DATA3=*p++;
+        DATA2=*p++;
+        DATA1=*p++;
+        DATA0=*p++;
+        APP_EN=1;
+        while ( APP_EN==1 );
+        len=len-2;
     }
-
-    if(os_len_offset != 0U)
+    if ( len )
     {
-        RAMMODE = 0x8CU;
-        DATA3 = *buf++;
-        DATA2 = *buf;
-        APP_EN = 1U;
-        while(APP_EN)
-        {
-        }
+        RAMMODE=0x8C;
+        DATA3=*p++;
+        DATA2=*p++;
+        APP_EN=1;
+        while ( APP_EN==1 );
     }
+    RAMMODE=0x00;
 
-    RAMMODE = 0x00U;
-
-#ifdef INTVPACTION
-    EA = 1;
-#endif /* INTVPACTION */
 }
 
 /**
@@ -259,9 +159,15 @@ void FlashToDgus(uint32_t flash_addr, uint16_t dgus_vp_addr, uint16_t len_words)
     cmd[6] = (uint8_t)(len_words >> 8);
     cmd[7] = (uint8_t)len_words;
 
-    write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 4U);
-    DgusWaitCmdIdle(sysDGUS_FLASH_RW_CMD_ADDR);
-    delay_ms(50U);
+    write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR + 1U, &cmd[2], 3U);
+    write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 1U);
+    SysEnterCritical();
+    while (cmd[0])
+    {
+        delay_ms(10);
+        read_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 1U);
+    }
+    SysExitCritical();
 }
 
 /**
@@ -273,7 +179,6 @@ void FlashToDgus(uint32_t flash_addr, uint16_t dgus_vp_addr, uint16_t len_words)
 void DgusToFlash(uint32_t flash_addr, uint16_t dgus_vp_addr, uint16_t len_words)
 {
     uint8_t cmd[8];
-    uint8_t ea_state;
 
     if(len_words == 0U)
     {
@@ -289,12 +194,15 @@ void DgusToFlash(uint32_t flash_addr, uint16_t dgus_vp_addr, uint16_t len_words)
     cmd[6] = (uint8_t)(len_words >> 8);
     cmd[7] = (uint8_t)len_words;
 
-    ea_state = EA;
-    EA = 0U;
-    write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 4U);
-    DgusWaitCmdIdle(sysDGUS_FLASH_RW_CMD_ADDR);
-    EA = ea_state;
-    delay_ms(50U);
+    write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR + 1U, &cmd[2], 3U);
+    write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 1U);
+    SysEnterCritical();
+    while (cmd[0])
+    {
+        delay_ms(10);
+        read_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 1);
+    }
+    SysExitCritical();
 }
 
 /**
