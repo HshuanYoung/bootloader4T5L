@@ -29,7 +29,7 @@ typedef struct _VP_EXCHANGE
     uint8_t mode;
 } VP_EXCHANGE;
 
-void read_dgus_vp(uint32_t addr,uint8_t *buf,uint8_t len);
+void read_dgus_vp(uint32_t addr,uint8_t *buf,uint16_t len);
 void write_dgus_vp ( uint32_t  addr, uint8_t *buf, uint16_t len );
 
 void delay_us(uint16_t us);

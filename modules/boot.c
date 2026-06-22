@@ -18,10 +18,34 @@
 #define bootCODE_TARGET_VP_START 0x10000UL
 #define bootCODE_COPY_BLOCK_WORDS 0x0800U
 #define bootCODE_COPY_BLOCK_COUNT 16U
+#define bootCMD_WAIT_STEP_MS 10U
+#define bootCMD_WAIT_TIMEOUT_MS 3000U
 
 #define BootReadControl(control_buf) read_dgus_vp(BOOT_CTRL_ADDR, (control_buf), 2U)
 
 static uint8_t xdata BootVpF000Cache[bootF000_CACHE_BYTES];
+
+static uint8_t BootWaitDgusCmdIdle(uint32_t cmd_addr)
+{
+    uint8_t cmd_state[2];
+    uint16_t elapsed_ms;
+
+    elapsed_ms = 0U;
+    cmd_state[0] = 0xFFU;
+    while(elapsed_ms < bootCMD_WAIT_TIMEOUT_MS)
+    {
+        delay_ms(bootCMD_WAIT_STEP_MS);
+        read_dgus_vp(cmd_addr, cmd_state, 1U);
+        if(cmd_state[0] == 0U)
+        {
+            return 1U;
+        }
+        elapsed_ms += bootCMD_WAIT_STEP_MS;
+    }
+
+    DBG_LOG_HEX16("[BOOT] cmd wait timeout addr=", cmd_addr);
+    return 0U;
+}
 
 /**
  * @brief 读取1个VP字。
@@ -160,24 +184,6 @@ uint8_t BootIsUpgradeRequested(void)
 }
 
 /**
- * @brief 判断VP 0x0020是否为AA55动态加载命令。
- * @return 控制值以AA 55开头时返回1，否则返回0。
- */
-uint8_t BootControlIsLoadCommand(void)
-{
-    uint8_t control_buf[BOOT_CTRL_BYTES];
-
-    BootReadControl(control_buf);
-    if((control_buf[0] == BOOT_CTRL_LOAD_0) &&
-       (control_buf[1] == BOOT_CTRL_LOAD_1))
-    {
-        return 1U;
-    }
-
-    return 0U;
-}
-
-/**
  * @brief 从VP 0x0020解析NOR起始块。
  * @return 存在AA55xxxx时返回动态块号，否则返回默认块号。
  */
@@ -236,9 +242,10 @@ uint8_t BootWaitLoadCommand(uint32_t timeout_ms)
             }
         }
 
-        if(BootControlIsLoadCommand() != 0U)
+        BootReadControl(control_buf);
+        if((control_buf[0] == BOOT_CTRL_LOAD_0) &&
+           (control_buf[1] == BOOT_CTRL_LOAD_1))
         {
-            BootReadControl(control_buf);
             DBG_LOG_U16("[BOOT] load cmd from vp block=",
                         (((uint16_t)control_buf[2] << 8) | (uint16_t)control_buf[3]));
             BootSetControl(control_buf, 1U);
@@ -420,14 +427,8 @@ static void BootReadNorCodeBlock(uint32_t flash_addr)
 
     write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR + 1U, &cmd[2], 3U);
     write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 1U);
-    SysEnterCritical();
-    delay_ms(100);
-    while (cmd[0])
-    {
-        delay_ms(10);
-        read_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 1);
-    }
-    SysExitCritical();
+    (void)BootWaitDgusCmdIdle(sysDGUS_FLASH_RW_CMD_ADDR);
+    delay_ms(FLASH_ACCESS_CYCLE);
 }
 
 /**

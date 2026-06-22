@@ -9,10 +9,31 @@
 #include "sys.h"
 
 #define dgusVP_COPY_LIMIT 0x20000UL
+#define dgusCMD_WAIT_STEP_MS 10U
+#define dgusFLASH_CMD_WAIT_TIMEOUT_MS 3000U
 
+static uint8_t DgusWaitCmdIdle(uint32_t cmd_addr, uint16_t timeout_ms)
+{
+    uint8_t cmd_state[2];
+    uint16_t elapsed_ms;
 
+    elapsed_ms = 0U;
+    cmd_state[0] = 0xFFU;
+    while(elapsed_ms < timeout_ms)
+    {
+        delay_ms(dgusCMD_WAIT_STEP_MS);
+        read_dgus_vp(cmd_addr, cmd_state, 1U);
+        if(cmd_state[0] == 0U)
+        {
+            return 1U;
+        }
+        elapsed_ms += dgusCMD_WAIT_STEP_MS;
+    }
 
-void read_dgus_vp(uint32_t addr,uint8_t *buf,uint8_t len)
+    return 0U;
+}
+
+void read_dgus_vp(uint32_t addr,uint8_t *buf,uint16_t len)
 {
 	uint32_t OS_addr = 0;
 	uint16_t OS_addr_offset = 0;
@@ -161,13 +182,8 @@ void FlashToDgus(uint32_t flash_addr, uint16_t dgus_vp_addr, uint16_t len_words)
 
     write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR + 1U, &cmd[2], 3U);
     write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 1U);
-    SysEnterCritical();
-    while (cmd[0])
-    {
-        delay_ms(10);
-        read_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 1U);
-    }
-    SysExitCritical();
+    (void)DgusWaitCmdIdle(sysDGUS_FLASH_RW_CMD_ADDR, dgusFLASH_CMD_WAIT_TIMEOUT_MS);
+    delay_ms(FLASH_ACCESS_CYCLE);
 }
 
 /**
@@ -196,13 +212,8 @@ void DgusToFlash(uint32_t flash_addr, uint16_t dgus_vp_addr, uint16_t len_words)
 
     write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR + 1U, &cmd[2], 3U);
     write_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 1U);
-    SysEnterCritical();
-    while (cmd[0])
-    {
-        delay_ms(10);
-        read_dgus_vp(sysDGUS_FLASH_RW_CMD_ADDR, cmd, 1);
-    }
-    SysExitCritical();
+    (void)DgusWaitCmdIdle(sysDGUS_FLASH_RW_CMD_ADDR, dgusFLASH_CMD_WAIT_TIMEOUT_MS);
+    delay_ms(FLASH_ACCESS_CYCLE);
 }
 
 /**

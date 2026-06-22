@@ -20,7 +20,6 @@
 
 void BootLoadApp(void);
 uint8_t BootIsUpgradeRequested(void);
-uint8_t BootControlIsLoadCommand(void);
 uint16_t BootResolveStartBlock(void);
 uint8_t BootWaitLoadCommand(uint32_t timeout_ms);
 void BootWaitRecoveryCommand(void);
