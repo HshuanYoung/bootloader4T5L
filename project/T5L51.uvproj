@@ -417,6 +417,16 @@
               <FilePath>..\source\uart.h</FilePath>
             </File>
             <File>
+              <FileName>debug_uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\source\debug_uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>debug_uart.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\source\debug_uart.h</FilePath>
+            </File>
+            <File>
               <FileName>timer.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\source\timer.c</FilePath>

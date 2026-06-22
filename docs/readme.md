@@ -11,7 +11,7 @@ bootloader4T5L/
 ├── include/    平台配置和系统服务代码
 ├── modules/    BOOT与OTA模块
 ├── project/    Keil uVision工程和启动文件
-├── source/     UART5与Timer0支持
+├── source/     UART5、UART2调试打印与Timer0支持
 ├── tools/      构建转换工具
 └── user/       启动加载器入口
 ```
@@ -36,7 +36,7 @@ bootloader4T5L/
 - `0x0023`为升级进度显示地址，范围为0到100。
 - UART5 OTA沿用现有AB CD 04/05/06协议样式，分包大小为4KB。
 - 兼容的OTA头标识为 `0x43335AA5`。
-- 精简底座不包含调试串口和printf。
+- 默认启用UART2调试打印，使用P0.4/P0.5，115200 8N1，可通过 `debugUART2_ENABLED` 关闭。
 - 启动文件保留原BOOT内存行为。
 - boot交接函数通过Keil链接设置固定到 `?PR?BOOTLOADAPP?BOOT(0xFF70)`。
 - 升级完成后，升级端应写入 `AA 55 xx xx` 指定程序起始块；若超时未指定，BOOT写入默认 `AA 55 00 70`。

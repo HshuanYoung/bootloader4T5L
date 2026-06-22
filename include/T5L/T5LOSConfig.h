@@ -76,6 +76,13 @@ typedef signed long int32_t;
 #define uartUART5_BAUDRATE 115200UL
 
 /**
+ * @brief UART2调试打印配置。
+ */
+#define debugUART2_ENABLED 1
+#define debugUART2_BAUDRATE 115200UL
+#define debugLOG_KEY_FLOW_ENABLED 1
+
+/**
  * @brief OTA下载配置。
  */
 #define otaCRC32_CHECK_ENABLED 1

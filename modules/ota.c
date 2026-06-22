@@ -7,6 +7,7 @@
 
 #include "ota.h"
 #include "boot.h"
+#include "debug_uart.h"
 #include "timer.h"
 #include "uart.h"
 
@@ -55,6 +56,7 @@
     do { \
         OtaStep = (step_value); \
         OtaTimeout = otaTIMEOUT_RELOAD; \
+        DBG_LOG_HEX8("[OTA] wait step=", OtaStep); \
     }while(0)
 
 static uint8_t xdata OtaVpBlock[otaHEADER_BYTES];
@@ -326,6 +328,7 @@ static void OtaSendHandshake(void)
 {
     uint8_t handshake[otaHANDSHAKE_LEN];
 
+    DBG_LOG_LINE("[OTA] send handshake");
     handshake[0] = 0xAAU;
     handshake[1] = 0xBBU;
     handshake[2] = 0x00U;
@@ -360,6 +363,15 @@ static void OtaSendData05(void)
     OtaWriteBe32(&send_buf[send_len], OtaStatus.off_len);
     send_len += 4U;
 
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+    DebugLog("[OTA] send 05 idx=");
+    DebugLogU8(OtaStatus.now_num);
+    DebugLog(" off=");
+    DebugLogU32(OtaStatus.off_position);
+    DebugLog(" len=");
+    DebugLogU32(OtaStatus.off_len);
+    DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
     OtaSendFrame(send_buf, send_len);
 }
 
@@ -387,6 +399,13 @@ static void OtaSendData06(uint8_t result)
     send_len += 2U;
     send_buf[send_len++] = result;
 
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+    DebugLog("[OTA] send 06 idx=");
+    DebugLogU8(OtaStatus.now_num);
+    DebugLog(" result=");
+    DebugLogU8(result);
+    DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
     OtaSendFrame(send_buf, send_len);
 }
 
@@ -412,6 +431,7 @@ void OtaInit(void)
     uint16_t i;
     uint8_t *ctx;
 
+    DBG_LOG_LINE("[OTA] init");
     ctx = (uint8_t *)&OtaStatus;
     for(i = 0U; i < sizeof(OtaStatus); i++)
     {
@@ -438,6 +458,7 @@ static void OtaHandleFileInfo(uint8_t xdata *frame, uint16_t len)
 
     if(len < 25U)
     {
+        DBG_LOG_U16("[OTA] 04 short len=", len);
         return;
     }
 
@@ -447,14 +468,17 @@ static void OtaHandleFileInfo(uint8_t xdata *frame, uint16_t len)
 
     if((status_index >= len) || ((crc_index + 4U) > len))
     {
+        DBG_LOG_U16("[OTA] 04 bad name len=", name_len);
         return;
     }
     if(frame[status_index] != 0U)
     {
+        DBG_LOG_HEX8("[OTA] 04 status skip=", frame[status_index]);
         return;
     }
     if(frame[6] >= otaDOWNLOAD_MAX)
     {
+        DBG_LOG_U8("[OTA] 04 index overflow idx=", frame[6]);
         return;
     }
 
@@ -486,6 +510,25 @@ static void OtaHandleFileInfo(uint8_t xdata *frame, uint16_t len)
     OtaStatus.download_end_flag = 0U;
     OtaFrameActivityFlag = 1U;
 
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+    DebugLog("[OTA] file info idx=");
+    DebugLogU8(OtaStatus.now_num);
+    DebugLog("/");
+    DebugLogU8(OtaStatus.total_num);
+    DebugLog(" type=");
+    DebugLogU8(file->itype);
+    DebugLog(" apply=");
+    DebugLogU8(file->apply);
+    DebugLog(" unid=");
+    DebugLogU16(file->unid);
+    DebugLog(" size=");
+    DebugLogU32(file->size);
+    DebugLog(" crc=");
+    DebugLogHex32(file->crc32);
+    DebugLog(" nand_blk=");
+    DebugLogU16(file->flash_start);
+    DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
     OtaSendData05();
     OtaSetTimeout(otaSTEP_WAIT_DATA);
 }
@@ -516,6 +559,19 @@ static void OtaWritePacketToNand(uint8_t xdata *frame, uint16_t packet_len)
 
     OtaWaitDgusCmdIdle(sysDGUS_NAND_CMD_ADDR);
     nand_addr = otaNAND_START_ADDR + (now_packet * otaNAND_BLOCK_BYTES);
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+    DebugLog("[OTA] write packet idx=");
+    DebugLogU8(OtaStatus.now_num);
+    DebugLog(" packet_blk=");
+    DebugLogU32(now_packet);
+    DebugLog(" nand=");
+    DebugLogHex32(nand_addr);
+    DebugLog(" vp=");
+    DebugLogHex16(vp_addr);
+    DebugLog(" len=");
+    DebugLogU16(packet_len);
+    DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
     OtaStartNandWrite(nand_addr, vp_addr, 1U);
     OtaUpdateDownloadProgress(packet_len);
 }
@@ -531,16 +587,30 @@ static uint8_t OtaFileCrcOk(void)
     OtaFileInfo *file;
 
 #if !otaCRC32_CHECK_ENABLED
+    DBG_LOG_LINE("[OTA] file crc skipped");
     return 1U;
 #else
     file = &OtaStatus.file[OtaStatus.now_num];
     if(file->crc32 == 0UL)
     {
+        DBG_LOG_LINE("[OTA] file crc empty skip");
         return 1U;
     }
 
     blocks = OtaCeilDiv32(file->size, otaNAND_BLOCK_BYTES);
     nand_addr = otaNAND_START_ADDR + ((uint32_t)file->flash_start * otaNAND_BLOCK_BYTES);
+
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+    DebugLog("[OTA] file crc start idx=");
+    DebugLogU8(OtaStatus.now_num);
+    DebugLog(" nand=");
+    DebugLogHex32(nand_addr);
+    DebugLog(" blocks=");
+    DebugLogU16(blocks);
+    DebugLog(" expect=");
+    DebugLogHex32(file->crc32);
+    DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
 
     OtaWaitDgusCmdIdle(sysDGUS_NAND_CMD_ADDR);
     OtaStartNandCrc32(nand_addr, blocks);
@@ -548,6 +618,20 @@ static uint8_t OtaFileCrcOk(void)
     delay_ms(50U);
     crc32 = OtaReadNandCrc32();
 
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+    DebugLog("[OTA] file crc ");
+    if(crc32 == file->crc32)
+    {
+        DebugLog("ok");
+    }
+    else
+    {
+        DebugLog("fail");
+    }
+    DebugLog(" got=");
+    DebugLogHex32(crc32);
+    DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
     return (crc32 == file->crc32) ? 1U : 0U;
 #endif
 }
@@ -562,23 +646,37 @@ static void OtaHandlePacketData(uint8_t xdata *frame, uint16_t len)
 
     if(len < 30U)
     {
+        DBG_LOG_U16("[OTA] 05 short len=", len);
         return;
     }
 
     payload_len = OtaReadBe16(&frame[2]);
     if(payload_len < 24U)
     {
+        DBG_LOG_U16("[OTA] 05 bad payload header=", payload_len);
         return;
     }
     payload_len -= 24U;
 
     if((payload_len > otaNAND_BLOCK_BYTES) || ((26U + payload_len + 2U) > len))
     {
+        DBG_LOG_U16("[OTA] 05 bad payload len=", payload_len);
         return;
     }
 
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+    DebugLog("[OTA] recv 05 idx=");
+    DebugLogU8(OtaStatus.now_num);
+    DebugLog(" off=");
+    DebugLogU32(OtaStatus.off_position);
+    DebugLog(" len=");
+    DebugLogU16(payload_len);
+    DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
+
     if(OtaPacketCrc16Ok(frame, payload_len) == 0U)
     {
+        DBG_LOG_LINE("[OTA] packet crc fail retry");
         OtaSendData05();
         OtaSetTimeout(otaSTEP_WAIT_DATA);
         return;
@@ -591,6 +689,7 @@ static void OtaHandlePacketData(uint8_t xdata *frame, uint16_t len)
     file = &OtaStatus.file[OtaStatus.now_num];
     if((OtaStatus.off_position + OtaStatus.off_len) >= file->size)
     {
+        DBG_LOG_U8("[OTA] file packet complete idx=", OtaStatus.now_num);
         if(OtaFileCrcOk() != 0U)
         {
             OtaSendData06(2U);
@@ -609,6 +708,7 @@ static void OtaHandlePacketData(uint8_t xdata *frame, uint16_t len)
     else
     {
         OtaStatus.off_position += OtaStatus.off_len;
+        DBG_LOG_U32("[OTA] next offset=", OtaStatus.off_position);
         OtaSendData05();
         OtaSetTimeout(otaSTEP_WAIT_DATA);
     }
@@ -619,6 +719,7 @@ static void OtaHandlePacketData(uint8_t xdata *frame, uint16_t len)
  */
 static void OtaHandleFileResultAck(void)
 {
+    DBG_LOG_U8("[OTA] recv 06 ack end_flag=", OtaStatus.download_end_flag);
     OtaStep = otaSTEP_IDLE;
     OtaFrameActivityFlag = 1U;
     if(OtaStatus.download_end_flag == 0x01U)
@@ -636,18 +737,31 @@ void OtaReceive(uint8_t xdata *frame, uint16_t len)
 
     if((frame == NULL) || (len < 5U))
     {
+        DBG_LOG_U16("[OTA] rx invalid len=", len);
         return;
     }
     if((frame[0] != otaFRAME_HEAD_0) || (frame[1] != otaFRAME_HEAD_1))
     {
+        DBG_LOG_LINE("[OTA] rx bad head");
         return;
     }
 
     payload_len = OtaReadBe16(&frame[2]);
     if((payload_len + 4U) > len)
     {
+        DBG_LOG_U16("[OTA] rx bad frame len=", len);
         return;
     }
+
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+    DebugLog("[OTA] rx cmd=");
+    DebugLogHex8(frame[4]);
+    DebugLog(" payload=");
+    DebugLogU16(payload_len);
+    DebugLog(" len=");
+    DebugLogU16(len);
+    DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
 
     switch(frame[4])
     {
@@ -661,6 +775,7 @@ void OtaReceive(uint8_t xdata *frame, uint16_t len)
             OtaHandleFileResultAck();
             break;
         default:
+            DBG_LOG_HEX8("[OTA] rx unknown cmd=", frame[4]);
             break;
     }
 }
@@ -676,16 +791,19 @@ void OtaTask(void)
         {
             if((OtaStep & 0xF0U) == 0x50U)
             {
+                DBG_LOG_HEX8("[OTA] timeout retry step=", OtaStep);
                 OtaSendData05();
                 OtaSetTimeout(otaSTEP_WAIT_DATA);
             }
             else if((OtaStep & 0xF0U) == 0x60U)
             {
+                DBG_LOG_HEX8("[OTA] timeout resend result step=", OtaStep);
                 OtaSendData06(OtaLastResult);
                 OtaSetTimeout(otaSTEP_WAIT_RESULT_ACK);
             }
             else
             {
+                DBG_LOG_HEX8("[OTA] timeout idle step=", OtaStep);
                 OtaStep = otaSTEP_IDLE;
             }
         }
@@ -693,6 +811,7 @@ void OtaTask(void)
 
     if(OtaStatus.download_end_flag == 0x11U)
     {
+        DBG_LOG_LINE("[OTA] download complete flag");
         OtaStatus.download_end_flag = 0U;
         OtaDownloadCompleteFlag = 1U;
     }
@@ -741,6 +860,15 @@ static void OtaApplyInternalFile(OtaFileInfo *file)
         block_count = 255UL;
     }
 
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+    DebugLog("[OTA] apply internal unid=");
+    DebugLogU16(file->unid);
+    DebugLog(" nand=");
+    DebugLogHex32(nand_addr);
+    DebugLog(" blocks=");
+    DebugLogU32(block_count);
+    DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
     OtaCopyNandToNor(nand_addr, (uint8_t)file->unid, (uint16_t)block_count);
 }
 
@@ -760,6 +888,16 @@ static void OtaApplyLibraryFile(OtaFileInfo *file)
     nand_addr *= otaNAND_BLOCK_BYTES;
     nand_addr += otaNAND_START_ADDR;
 
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+    DebugLog("[OTA] apply lib unid=");
+    DebugLogU16(file->unid);
+    DebugLog(" size=");
+    DebugLogU32(file->size);
+    DebugLog(" nand=");
+    DebugLogHex32(nand_addr);
+    DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
+
     OtaCopyNandToNor(nand_addr, otaNOR_RESERVED_ID, 1U);
 
     block_count_words = OtaCeilDiv32(file->size, otaNAND_BLOCK_BYTES);
@@ -774,6 +912,15 @@ static void OtaApplyLibraryFile(OtaFileInfo *file)
 
     for(block_index = 0U; block_index < block_count; block_index++)
     {
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+        DebugLog("[OTA] apply lib block=");
+        DebugLogU8(block_index);
+        DebugLog(" nor_off=");
+        DebugLogHex32(extern_flash_addr);
+        DebugLog(" flash=");
+        DebugLogHex32(flash_addr);
+        DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
         OtaReadNorToVp(otaNOR_RESERVED_ID, extern_flash_addr, 0xF000U, 0x0800U);
         OtaWriteF000ToNor(flash_addr);
 
@@ -790,9 +937,19 @@ void OtaActionFromDownload(void)
     uint8_t file_index;
     OtaFileInfo *file;
 
+    DBG_LOG_U8("[OTA] apply start total=", OtaStatus.total_num);
     for(file_index = 0U; file_index < OtaStatus.total_num; file_index++)
     {
         file = &OtaStatus.file[file_index];
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+        DebugLog("[OTA] apply file idx=");
+        DebugLogU8(file_index);
+        DebugLog(" type=");
+        DebugLogU8(file->itype);
+        DebugLog(" unid=");
+        DebugLogU16(file->unid);
+        DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
         if((file->itype == 1U) && (file->unid <= 127U))
         {
             OtaApplyLibraryFile(file);
@@ -803,9 +960,11 @@ void OtaActionFromDownload(void)
         }
         else
         {
+            DBG_LOG_U8("[OTA] skip file idx=", file_index);
             __NOP();
         }
     }
+    DBG_LOG_LINE("[OTA] apply done");
 }
 
 /**
@@ -819,6 +978,7 @@ void BootWaitRecoveryCommand(void)
 
     elapsed_ms = 0UL;
 
+    DBG_LOG_U32("[BOOT] recovery window ms=", BOOT_RECOVERY_WINDOW_MS);
     Uart5Init(uartUART5_BAUDRATE);
     TimerInit();
 
@@ -827,6 +987,19 @@ void BootWaitRecoveryCommand(void)
         recovery_type = UartRecoveryGetControl(control_buf);
         if(recovery_type != UART_RECOVERY_NONE)
         {
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+            DebugLog("[BOOT] recovery cmd type=");
+            DebugLogU8(recovery_type);
+            DebugLog(" value=");
+            DebugLogHex8(control_buf[0]);
+            DebugLog(" ");
+            DebugLogHex8(control_buf[1]);
+            DebugLog(" ");
+            DebugLogHex8(control_buf[2]);
+            DebugLog(" ");
+            DebugLogHex8(control_buf[3]);
+            DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
             BootSetControl(control_buf, 1U);
             break;
         }
@@ -837,7 +1010,9 @@ void BootWaitRecoveryCommand(void)
 
     TimerStop();
     Uart5Stop();
+    DBG_LOG_LINE("[BOOT] recovery window done");
     BootReloadConfigFromFlash();
+    DBG_LOG_LINE("[BOOT] config reloaded");
 }
 
 /**
@@ -849,6 +1024,7 @@ void BootEnterUpgradeMode(void)
 
     idle_ms = 0UL;
 
+    DBG_LOG_LINE("[BOOT] enter upgrade mode");
     OtaInit();
     OtaFrameActivityFlag = 0U;
     Uart5Init(uartUART5_BAUDRATE);
@@ -864,12 +1040,16 @@ void BootEnterUpgradeMode(void)
 
         if(OtaDownloadCompleteFlag != 0U)
         {
+            DBG_LOG_LINE("[BOOT] download complete");
             OtaActionFromDownload();
+            DBG_LOG_LINE("[BOOT] apply complete");
             BootWriteProgress(100U);
             BootSwitchConfiguredPage(BOOT_FINISH_PAGE_ADDR);
+            DBG_LOG_LINE("[BOOT] wait post-upgrade load cmd");
             (void)BootWaitLoadCommand(BOOT_POST_UPGRADE_LOAD_TIMEOUT_MS);
             TimerStop();
             Uart5Stop();
+            DBG_LOG_LINE("[BOOT] soft reset");
             SoftReset();
             while(1)
             {
@@ -889,6 +1069,7 @@ void BootEnterUpgradeMode(void)
         }
     }
 
+    DBG_LOG_LINE("[BOOT] upgrade idle timeout");
     TimerStop();
     Uart5Stop();
     BootClearControl();

@@ -7,6 +7,7 @@
  */
 
 #include "boot.h"
+#include "debug_uart.h"
 #include "uart.h"
 
 #define bootAPP_DATA_BYTES 65280UL
@@ -61,6 +62,20 @@ void BootSetControl(uint8_t *control_buf, uint8_t persist)
         return;
     }
 
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+    DebugLog("[BOOT] set ctrl=");
+    DebugLogHex8(control_buf[0]);
+    DebugLog(" ");
+    DebugLogHex8(control_buf[1]);
+    DebugLog(" ");
+    DebugLogHex8(control_buf[2]);
+    DebugLog(" ");
+    DebugLogHex8(control_buf[3]);
+    DebugLog(" persist=");
+    DebugLogU8(persist);
+    DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
+
     write_dgus_vp(BOOT_CTRL_ADDR, control_buf, 2U);
     if(persist != 0U)
     {
@@ -75,6 +90,7 @@ void BootSetDefaultLoadControl(void)
 {
     uint8_t control_buf[BOOT_CTRL_BYTES];
 
+    DBG_LOG_U16("[BOOT] default load block=", BOOT_DEFAULT_START_BLOCK);
     control_buf[0] = BOOT_CTRL_LOAD_0;
     control_buf[1] = BOOT_CTRL_LOAD_1;
     control_buf[2] = (uint8_t)(BOOT_DEFAULT_START_BLOCK >> 8);
@@ -88,10 +104,24 @@ void BootSetDefaultLoadControl(void)
  */
 void BootWriteProgress(uint8_t progress)
 {
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+    static uint8_t last_progress = 0xFFU;
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
+
     if(progress > 100U)
     {
         progress = 100U;
     }
+
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+    if(progress != last_progress)
+    {
+        DebugLog("[BOOT] progress=");
+        DebugLogU8(progress);
+        DebugLog("\r\n");
+        last_progress = progress;
+    }
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
 
     BootWriteVpWord(BOOT_PROGRESS_ADDR, (uint16_t)progress);
 }
@@ -102,14 +132,24 @@ void BootWriteProgress(uint8_t progress)
  */
 void BootSwitchConfiguredPage(uint16_t page_addr)
 {
+    uint16_t page_switch;
     uint16_t page_id;
 
-    if(BootReadVpWord(BOOT_PAGE_SWITCH_ADDR) != BOOT_PAGE_SWITCH_VALUE)
+    page_switch = BootReadVpWord(BOOT_PAGE_SWITCH_ADDR);
+    if(page_switch != BOOT_PAGE_SWITCH_VALUE)
     {
+        DBG_LOG_HEX16("[BOOT] page switch disabled value=", page_switch);
         return;
     }
 
     page_id = BootReadVpWord(page_addr);
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+    DebugLog("[BOOT] switch page=");
+    DebugLogU16(page_id);
+    DebugLog(" from cfg=");
+    DebugLogHex16(page_addr);
+    DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
     SwitchPageById(page_id);
 }
 
@@ -180,15 +220,31 @@ uint8_t BootWaitLoadCommand(uint32_t timeout_ms)
     uint8_t control_buf[BOOT_CTRL_BYTES];
     uint8_t recovery_type;
 
+    DBG_LOG_U32("[BOOT] wait load timeout_ms=", timeout_ms);
     elapsed_ms = 0UL;
     while(elapsed_ms < timeout_ms)
     {
         recovery_type = UartRecoveryGetControl(control_buf);
         if(recovery_type != 0U)
         {
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+            DebugLog("[BOOT] recovery ctrl type=");
+            DebugLogU8(recovery_type);
+            DebugLog(" value=");
+            DebugLogHex8(control_buf[0]);
+            DebugLog(" ");
+            DebugLogHex8(control_buf[1]);
+            DebugLog(" ");
+            DebugLogHex8(control_buf[2]);
+            DebugLog(" ");
+            DebugLogHex8(control_buf[3]);
+            DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
             if((control_buf[0] == BOOT_CTRL_LOAD_0) &&
                (control_buf[1] == BOOT_CTRL_LOAD_1))
             {
+                DBG_LOG_U16("[BOOT] load cmd from recovery block=",
+                            (((uint16_t)control_buf[2] << 8) | (uint16_t)control_buf[3]));
                 BootSetControl(control_buf, 1U);
                 return 1U;
             }
@@ -197,6 +253,8 @@ uint8_t BootWaitLoadCommand(uint32_t timeout_ms)
         if(BootControlIsLoadCommand() != 0U)
         {
             BootReadControl(control_buf);
+            DBG_LOG_U16("[BOOT] load cmd from vp block=",
+                        (((uint16_t)control_buf[2] << 8) | (uint16_t)control_buf[3]));
             BootSetControl(control_buf, 1U);
             return 1U;
         }
@@ -206,6 +264,7 @@ uint8_t BootWaitLoadCommand(uint32_t timeout_ms)
         elapsed_ms += 10UL;
     }
 
+    DBG_LOG_LINE("[BOOT] wait load timeout");
     BootSetDefaultLoadControl();
     return 0U;
 }
@@ -217,6 +276,7 @@ void BootClearControl(void)
 {
     uint8_t zero_buf[BOOT_CTRL_BYTES];
 
+    DBG_LOG_LINE("[BOOT] clear ctrl");
     zero_buf[0] = 0U;
     zero_buf[1] = 0U;
     zero_buf[2] = 0U;
@@ -401,9 +461,11 @@ uint8_t BootCodeCheck(uint16_t start_block)
 {
     uint32_t flash_addr;
     uint32_t target_vp;
+    uint16_t crc;
     uint8_t i;
     VP_EXCHANGE exchange_msg;
 
+    DBG_LOG_U16("[BOOT] code check start block=", start_block);
     read_dgus_vp(0xF000U, BootVpF000Cache, bootF000_CACHE_WORDS);
 
     flash_addr = (uint32_t)start_block << 11;
@@ -411,6 +473,15 @@ uint8_t BootCodeCheck(uint16_t start_block)
 
     for(i = 0U; i < bootCODE_COPY_BLOCK_COUNT; i++)
     {
+#if debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED
+        DebugLog("[BOOT] copy code idx=");
+        DebugLogU8(i);
+        DebugLog(" flash=");
+        DebugLogHex32(flash_addr);
+        DebugLog(" target_vp=");
+        DebugLogHex32(target_vp);
+        DebugLog("\r\n");
+#endif /* debugUART2_ENABLED && debugLOG_KEY_FLOW_ENABLED */
         BootReadNorCodeBlock(flash_addr);
 
         exchange_msg.sourceVP = 0xF000UL;
@@ -425,10 +496,13 @@ uint8_t BootCodeCheck(uint16_t start_block)
 
     write_dgus_vp(0xF000U, BootVpF000Cache, bootF000_CACHE_WORDS);
 
-    if(BootCodeCrc16() == 0U)
+    crc = BootCodeCrc16();
+    if(crc == 0U)
     {
+        DBG_LOG_LINE("[BOOT] code crc ok");
         return 1U;
     }
 
+    DBG_LOG_HEX16("[BOOT] code crc fail crc=", crc);
     return 0U;
 }
